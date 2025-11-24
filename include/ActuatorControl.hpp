@@ -1,0 +1,97 @@
+#ifndef ACTUATOR_CONTROL_H
+#define ACTUATOR_CONTROL_H
+
+#include <Arduino.h>
+#include "Wire.h"
+
+#define I2Cadr_MCP4725 0x60
+
+enum ControllerMode {
+  PID_CONTROL = 0,
+  VALVE_SET_VALUE_CONTROL = 1,
+  SINE_CONTROL = 2,
+  STEP_CONTROL = 3,
+  TRIANGLE_CONTROL = 4
+};
+
+struct PIDConfig {
+  float p_gain;
+  float i_gain;
+  float d_gain;
+  float valve_offset;
+};
+
+struct SignalGeneratorConfig {
+  uint16_t offset;
+  uint16_t amplitude;
+  uint16_t samples_per_period;
+};
+
+struct ControlState {
+  float error;
+  float integrator;
+  float output;
+  uint16_t valve_signal;
+};
+
+class ActuatorControl {
+public:
+  ActuatorControl(uint8_t valve_ctrl_pin);
+  
+  void initialize();
+  
+  // Control mode management
+  void setControllerMode(ControllerMode mode);
+  ControllerMode getControllerMode() const;
+  
+  // PID control
+  void setPIDConfig(const PIDConfig& config);
+  PIDConfig getPIDConfig() const;
+  void resetPIDState();
+  uint16_t updatePID(float flow_reference, float flow_measured);
+  
+  // Signal generator control
+  void setSignalGeneratorConfig(const SignalGeneratorConfig& config);
+  SignalGeneratorConfig getSignalGeneratorConfig() const;
+  uint16_t updateSignalGenerator();
+  
+  // Direct valve control
+  void setValveControlSignal(uint16_t signal);
+  uint16_t getValveControlSignal() const;
+  
+  // Output method selection
+  void setExternalPWM(bool external);
+  bool isExternalPWM() const;
+  
+  // Get current control state
+  ControlState getControlState() const;
+  
+  // Main execution method - call this from the main loop
+  void execute(float flow_reference, float flow_measured, int quiet_mode);
+  
+private:
+  uint8_t _valve_ctrl_pin;
+  ControllerMode _controller_mode;
+  bool _external_pwm;
+  
+  // PID state
+  PIDConfig _pid_config;
+  ControlState _control_state;
+  
+  // Signal generator state
+  SignalGeneratorConfig _sig_gen_config;
+  uint16_t _index_in_period;
+  uint16_t _valve_signal_externally_set;
+  uint16_t _valve_signal_generated;
+  
+  // Output methods
+  void outputToValve(uint16_t signal);
+  void analogOutMCP4725(uint16_t dac_output);
+  
+  // Signal generators
+  uint16_t generateSine();
+  uint16_t generateStep();
+  uint16_t generateTriangle();
+};
+
+#endif
