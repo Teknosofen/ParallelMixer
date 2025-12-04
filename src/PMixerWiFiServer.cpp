@@ -1,0 +1,471 @@
+#include "PMixerWiFiServer.hpp"
+
+WebServer server(80);
+
+PMixerWiFiServer::PMixerWiFiServer(String ssid, String password)
+    : _ssid(ssid), _password(password), _running(false), _maxDataPoints(100),
+      _currentFlow(0.0f), _currentPressure(0.0f), _currentValveSignal(0.0f),
+      _currentMode("Initializing")
+{
+    _timestamps.reserve(_maxDataPoints);
+    _flowHistory.reserve(_maxDataPoints);
+    _pressureHistory.reserve(_maxDataPoints);
+    _valveSignalHistory.reserve(_maxDataPoints);
+}
+
+void PMixerWiFiServer::start() {
+    if (_running) return;
+    
+    WiFi.softAP(_ssid.c_str(), _password.c_str());
+    setupWebServer();
+    server.begin();
+    _running = true;
+    
+    Serial.println("WiFi AP Started");
+    Serial.print("SSID: ");
+    Serial.println(_ssid);
+    Serial.print("IP: ");
+    Serial.println(getApIpAddress());
+}
+
+void PMixerWiFiServer::stop() {
+    if (!_running) return;
+    
+    server.stop();
+    WiFi.softAPdisconnect(true);
+    _running = false;
+    
+    Serial.println("WiFi AP Stopped");
+}
+
+void PMixerWiFiServer::handleClient() {
+    if (_running) {
+        server.handleClient();
+    }
+}
+
+String PMixerWiFiServer::getApIpAddress() const {
+    return WiFi.softAPIP().toString();
+}
+
+void PMixerWiFiServer::updateFlow(float flow) {
+    _currentFlow = flow;
+}
+
+void PMixerWiFiServer::updatePressure(float pressure) {
+    _currentPressure = pressure;
+}
+
+void PMixerWiFiServer::updateValveSignal(float signal) {
+    _currentValveSignal = signal;
+    // Add data point when valve signal updates (or choose your trigger)
+    addDataPoint(_currentFlow, _currentPressure, _currentValveSignal);
+}
+
+void PMixerWiFiServer::updateMode(const String& mode) {
+    _currentMode = mode;
+}
+
+void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal) {
+    _timestamps.push_back(millis());
+    _flowHistory.push_back(flow);
+    _pressureHistory.push_back(pressure);
+    _valveSignalHistory.push_back(signal);
+    
+    trimDataHistory();
+}
+
+void PMixerWiFiServer::trimDataHistory() {
+    while (_timestamps.size() > _maxDataPoints) {
+        _timestamps.erase(_timestamps.begin());
+        _flowHistory.erase(_flowHistory.begin());
+        _pressureHistory.erase(_pressureHistory.begin());
+        _valveSignalHistory.erase(_valveSignalHistory.begin());
+    }
+}
+
+void PMixerWiFiServer::setupWebServer() {
+    server.on("/", [this]() { handleRoot(); });
+    server.on("/data", [this]() { handleData(); });
+    server.on("/history", [this]() { handleHistory(); });
+}
+
+void PMixerWiFiServer::handleRoot() {
+    server.send(200, "text/html", generateHtmlPage());
+}
+
+void PMixerWiFiServer::handleData() {
+    server.send(200, "application/json", generateDataJson());
+}
+
+void PMixerWiFiServer::handleHistory() {
+    server.send(200, "application/json", generateHistoryJson());
+}
+
+String PMixerWiFiServer::generateDataJson() {
+    String json = "{";
+    json += "\"flow\":" + String(_currentFlow, 2) + ",";
+    json += "\"pressure\":" + String(_currentPressure, 2) + ",";
+    json += "\"valve\":" + String(_currentValveSignal, 2) + ",";
+    json += "\"mode\":\"" + _currentMode + "\",";
+    json += "\"timestamp\":" + String(millis());
+    json += "}";
+    return json;
+}
+
+String PMixerWiFiServer::generateHistoryJson() {
+    String json = "{";
+    json += "\"timestamps\":[";
+    for (size_t i = 0; i < _timestamps.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_timestamps[i]);
+    }
+    json += "],\"flow\":[";
+    for (size_t i = 0; i < _flowHistory.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_flowHistory[i], 2);
+    }
+    json += "],\"pressure\":[";
+    for (size_t i = 0; i < _pressureHistory.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_pressureHistory[i], 2);
+    }
+    json += "],\"valve\":[";
+    for (size_t i = 0; i < _valveSignalHistory.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_valveSignalHistory[i], 2);
+    }
+    json += "]}";
+    return json;
+}
+
+String PMixerWiFiServer::generateHtmlPage() {
+    String html = R"rawhtml(
+<!DOCTYPE html>
+<html>
+<head>
+    <title>P-Mixer Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        body {
+            background-color: #84B6D6;
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            color: #000;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        h1 {
+            text-align: center;
+            color: #0078D7;
+            margin-top: 0;
+        }
+        .status-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .status-card {
+            background-color: #f0f0f0;
+            padding: 15px;
+            border-radius: 8px;
+            border: 2px solid #0078D7;
+        }
+        .status-label {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .status-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #0078D7;
+        }
+        .mode-display {
+            background-color: #e0f8e0;
+            border: 2px solid #207520;
+            color: #207520;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+        .chart-container {
+            position: relative;
+            height: 400px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #0078D7;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 16px;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #005FA3;
+        }
+        .button-container {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .update-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            background-color: #00ff00;
+            border-radius: 50%;
+            margin-left: 10px;
+            animation: blink 1s infinite;
+        }
+        @keyframes blink {
+            0%, 50% { opacity: 1; }
+            51%, 100% { opacity: 0.3; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>P-Mixer Monitor <span class="update-indicator" id="indicator"></span></h1>
+        
+        <div class="mode-display" id="modeDisplay">Mode: Initializing...</div>
+        
+        <div class="status-panel">
+            <div class="status-card">
+                <div class="status-label">Flow</div>
+                <div class="status-value" id="flowValue">--</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Pressure</div>
+                <div class="status-value" id="pressureValue">--</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Valve Control Signal</div>
+                <div class="status-value" id="valveValue">--</div>
+            </div>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="dataChart"></canvas>
+        </div>
+        
+        <div class="button-container">
+            <button onclick="saveDataToCsv()">💾 Save Data to CSV</button>
+            <button onclick="clearData()">🗑️ Clear Graph</button>
+        </div>
+    </div>
+
+    <script>
+        // Data storage
+        let dataHistory = {
+            timestamps: [],
+            flow: [],
+            pressure: [],
+            valve: []
+        };
+
+        // Chart setup
+        const ctx = document.getElementById('dataChart').getContext('2d');
+        const chart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Flow',
+                        data: [],
+                        borderColor: '#0078D7',
+                        backgroundColor: 'rgba(0, 120, 215, 0.1)',
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Pressure',
+                        data: [],
+                        borderColor: '#FF6B6B',
+                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Valve Signal',
+                        data: [],
+                        borderColor: '#4ECDC4',
+                        backgroundColor: 'rgba(78, 205, 196, 0.1)',
+                        tension: 0.3
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                interaction: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    },
+                    title: {
+                        display: true,
+                        text: 'Real-time Data'
+                    }
+                },
+                scales: {
+                    x: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: 'Time (seconds)'
+                        }
+                    },
+                    y: {
+                        display: true,
+                        title: {
+                            display: true,
+                            text: 'Value'
+                        }
+                    }
+                }
+            }
+        });
+
+        // Fetch current data
+        async function fetchData() {
+            try {
+                const response = await fetch('/data');
+                const data = await response.json();
+                
+                // Update display values
+                document.getElementById('flowValue').textContent = data.flow.toFixed(2);
+                document.getElementById('pressureValue').textContent = data.pressure.toFixed(2);
+                document.getElementById('valveValue').textContent = data.valve.toFixed(2);
+                document.getElementById('modeDisplay').textContent = 'Mode: ' + data.mode;
+                
+                // Store data
+                const timeInSeconds = (data.timestamp / 1000).toFixed(1);
+                dataHistory.timestamps.push(data.timestamp);
+                dataHistory.flow.push(data.flow);
+                dataHistory.pressure.push(data.pressure);
+                dataHistory.valve.push(data.valve);
+                
+                // Update chart
+                chart.data.labels.push(timeInSeconds);
+                chart.data.datasets[0].data.push(data.flow);
+                chart.data.datasets[1].data.push(data.pressure);
+                chart.data.datasets[2].data.push(data.valve);
+                
+                // Keep only configured number of points on graph
+                const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
+                if (chart.data.labels.length > maxPoints) {
+                    chart.data.labels.shift();
+                    chart.data.datasets.forEach(dataset => dataset.data.shift());
+                }
+                
+                chart.update('none'); // Update without animation for smoother real-time
+            } catch (error) {
+                console.error('Error fetching data:', error);
+            }
+        }
+
+        // Load historical data on page load
+        async function loadHistory() {
+            try {
+                const response = await fetch('/history');
+                const history = await response.json();
+                
+                dataHistory.timestamps = history.timestamps;
+                dataHistory.flow = history.flow;
+                dataHistory.pressure = history.pressure;
+                dataHistory.valve = history.valve;
+                
+                // Populate chart with configured number of points
+                const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
+                const startIdx = Math.max(0, history.timestamps.length - maxPoints);
+                for (let i = startIdx; i < history.timestamps.length; i++) {
+                    const timeInSeconds = (history.timestamps[i] / 1000).toFixed(1);
+                    chart.data.labels.push(timeInSeconds);
+                    chart.data.datasets[0].data.push(history.flow[i]);
+                    chart.data.datasets[1].data.push(history.pressure[i]);
+                    chart.data.datasets[2].data.push(history.valve[i]);
+                }
+                chart.update();
+            } catch (error) {
+                console.error('Error loading history:', error);
+            }
+        }
+
+        // Save data to CSV
+        function saveDataToCsv() {
+            if (dataHistory.timestamps.length === 0) {
+                alert('No data to save!');
+                return;
+            }
+
+            let csv = 'Timestamp (ms)\tFlow\tPressure\tValve Signal\n';
+            
+            for (let i = 0; i < dataHistory.timestamps.length; i++) {
+                csv += dataHistory.timestamps[i] + '\t';
+                csv += dataHistory.flow[i].toFixed(2) + '\t';
+                csv += dataHistory.pressure[i].toFixed(2) + '\t';
+                csv += dataHistory.valve[i].toFixed(2) + '\n';
+            }
+
+            // Create download
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            
+            // Generate filename with timestamp
+            const now = new Date();
+            const filename = 'pmixer_data_' + 
+                now.getFullYear() + 
+                ('0' + (now.getMonth() + 1)).slice(-2) + 
+                ('0' + now.getDate()).slice(-2) + '_' +
+                ('0' + now.getHours()).slice(-2) + 
+                ('0' + now.getMinutes()).slice(-2) + 
+                ('0' + now.getSeconds()).slice(-2) + 
+                '.csv';
+            
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+        }
+
+        // Clear data
+        function clearData() {
+            if (confirm('Clear all graphed data?')) {
+                chart.data.labels = [];
+                chart.data.datasets.forEach(dataset => dataset.data = []);
+                chart.update();
+            }
+        }
+
+        // Initialize
+        loadHistory();
+        
+        // Update every 500ms
+        setInterval(fetchData, 500);
+    </script>
+</body>
+</html>
+)rawhtml";
+    return html;
+}
