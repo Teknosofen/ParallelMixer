@@ -1,47 +1,51 @@
-// Main.ino - Complete refactored ventilator control system
-// For Arduino environment
+// Main.cpp - Complete refactored ventilator control system with Dual I2C + Dual Serial
+// For T-Display S3
 // Date: 2024
 
 #include <Arduino.h>
 #include "main.hpp"
 #include <TFT_eSPI.h>
+#include "PinConfig.h"            // NEW: Pin configuration
 #include "SensorReader.hpp"
 #include "ActuatorControl.hpp"
 #include "CommandParser.hpp"
 #include "ImageRenderer.hpp"
 #include "Button.hpp"
-#define PMIXER_GRAPH_DISPLAY_POINTS 512  // Show 512 samples on graph
+#define PMIXER_GRAPH_DISPLAY_POINTS 512
 #include "PMixerWiFiServer.hpp"
 
-TFT_eSPI tft = TFT_eSPI(); // Initialize the display
-TFT_eSprite spriteLeft = TFT_eSprite(&tft); // Create sprite object left
+TFT_eSPI tft = TFT_eSPI();
+TFT_eSprite spriteLeft = TFT_eSprite(&tft);
 ImageRenderer renderer(tft);
 
-// System objects
-SensorReader sensors(Flow_Input_Analogue_pin, Flow_Output_Analogue_pin);
+// NEW: Two sensor readers on separate I2C buses
+SensorReader sensors_bus0(&Wire, "Bus0");
+SensorReader sensors_bus1(&Wire1, "Bus1");
+
 ActuatorControl actuator(Valve_ctrl_Analogue_pin);
 CommandParser parser;
 
-Button interactionKey1(INTERACTION_BUTTON_PIN);  // GPIO14 Key 2
-PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD); // WiFi server for PMixer
+Button interactionKey1(INTERACTION_BUTTON_PIN);
+PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
 
 // System configuration
 SystemConfig sysConfig;
-SensorData sensorData;
+SensorData sensorData_bus0;  // Data from Bus 0 sensors
+SensorData sensorData_bus1;  // Data from Bus 1 sensors
 
 // Timing
 uint32_t past_time;
 
 void outputData() {
+  // Output data from Bus 0 (primary sensors)
   switch (sysConfig.quiet_mode) {
-    case 0:  // Verbose: dP, Flow, SupplyP, Fused Flow, Valve signal
-      Serial.print(sensorData.differential_pressure, 2);
+    case 0:  // Verbose: dP, Flow, SupplyP, Valve signal
+      Serial.print("[Bus0] ");
+      Serial.print(sensorData_bus0.differential_pressure, 2);
       Serial.print(" ");
-      Serial.print(sensorData.flow, 2);
+      Serial.print(sensorData_bus0.flow, 2);
       Serial.print(" ");
-      Serial.print(sensorData.supply_pressure, 2);
-      Serial.print(" ");
-      Serial.print(sensorData.fused_flow, 2);
+      Serial.print(sensorData_bus0.supply_pressure, 2);
       Serial.print(" ");
       Serial.println(actuator.getValveControlSignal());
       break;
@@ -59,172 +63,264 @@ void outputData() {
         Serial.print(" V ");
         Serial.print(actuator.getValveControlSignal());
         Serial.print(" F ");
-        Serial.println(sensorData.fused_flow);
+        Serial.println(sensorData_bus0.flow);
       }
       break;
       
     case 3:  // Special - controlled by actuator.execute()
-      // Output is handled in actuator.execute() for mode 3
       break;
       
     case 4:  // Abbreviated: dP, Flow, Valve signal
-      Serial.print(sensorData.differential_pressure, 2);
+      Serial.print(sensorData_bus0.differential_pressure, 2);
       Serial.print(" ");
-      Serial.print(sensorData.flow, 2);
+      Serial.print(sensorData_bus0.flow, 2);
       Serial.print(" ");
       Serial.println(actuator.getValveControlSignal());
       break;
       
-    case 5:  // Analog input
-      Serial.print("A1 in ");
-      Serial.println(sensorData.flow_ref_analogue);
+    case 5:  // Flow and Supply Pressure
+      Serial.print("Flow: ");
+      Serial.print(sensorData_bus0.flow, 2);
+      Serial.print(" SupplyP: ");
+      Serial.println(sensorData_bus0.supply_pressure, 2);
       break;
       
-    case 6:  // Flow, SupplyP, FusedFlow
-      Serial.print(sensorData.flow, 2);
+    case 6:  // Flow, SupplyP from both buses
+      Serial.print("[Bus0] ");
+      Serial.print(sensorData_bus0.flow, 2);
       Serial.print(" ");
-      Serial.print(sensorData.supply_pressure, 2);
+      Serial.print(sensorData_bus0.supply_pressure, 2);
+      Serial.print(" | [Bus1] ");
+      Serial.print(sensorData_bus1.flow, 2);
       Serial.print(" ");
-      Serial.println(sensorData.fused_flow, 2);
+      Serial.println(sensorData_bus1.supply_pressure, 2);
       break;
   }
 }
 
 void setup() {
-  renderer.begin(); //initialize display
+  // CRITICAL: Enable display power first!
+  pinMode(DISPLAY_POWER_PIN, OUTPUT);
+  digitalWrite(DISPLAY_POWER_PIN, HIGH);
+  delay(100);
+  
+  renderer.begin(); // Initialize display
 
   // Initialize system configuration with defaults
   sysConfig.delta_t = 100000;  // Sampling time in microseconds
-  sysConfig.quiet_mode = 0;  // Verbose output
-  sysConfig.flow_setting_is_analog = false;  // Use digital flow reference
+  sysConfig.quiet_mode = 0;    // Verbose output
   sysConfig.digital_flow_reference = 0.0;  // Flow reference in L/min
   
-  // Initialize communication
+  // Initialize USB Serial
   parser.begin(250000);
-  delay(12000); // Wait for serial to stabilize
+  delay(2000);  // Reduced from 12000 - usually not needed with USB CDC
   
-  Serial.println("Parallel mixer setup started");
+  Serial.println("\n=== P-Mixer Dual I2C + Dual Serial Setup ===\n");
 
+  // ============================================================================
+  // Initialize I2C Buses BEFORE sensors
+  // ============================================================================
+  
+  Serial.println("Initializing I2C buses...");
+  
+  // I2C Bus 0 (Wire) - GPIO43/44
+  Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, 500000);
+  Serial.printf("✅ I2C Bus 0: SDA=GPIO%d, SCL=GPIO%d\n", I2C0_SDA_PIN, I2C0_SCL_PIN);
+  
+  // I2C Bus 1 (Wire1) - GPIO10/11
+  Wire1.begin(I2C1_SDA_PIN, I2C1_SCL_PIN, 500000);
+  Serial.printf("✅ I2C Bus 1: SDA=GPIO%d, SCL=GPIO%d\n\n", I2C1_SDA_PIN, I2C1_SCL_PIN);
+
+  // ============================================================================
+  // Initialize Serial Ports for external microcontrollers
+  // ============================================================================
+  
+  Serial.println("Initializing Serial ports...");
+  
+  // Serial1 - First external microcontroller
+  Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
+  Serial.printf("✅ Serial1: TX=GPIO%d, RX=GPIO%d\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
+  
+  // Serial2 - Second external microcontroller
+  Serial2.begin(115200, SERIAL_8N1, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
+  Serial.printf("✅ Serial2: TX=GPIO%d, RX=GPIO%d\n\n", SERIAL2_TX_PIN, SERIAL2_RX_PIN);
+
+  // ============================================================================
+  // Initialize Sensors on both buses
+  // ============================================================================
+  
   interactionKey1.begin();
 
-  // Initialize sensors
-  if (!sensors.initialize()) {
-    Serial.println("Sensor initialization failed!");
+  Serial.println("Initializing sensors...");
+  
+  // Initialize sensors on Bus 0
+  if (!sensors_bus0.initialize()) {
+    Serial.println("❌ Bus 0 sensor initialization failed!");
   }
   
+  // Initialize sensors on Bus 1
+  if (!sensors_bus1.initialize()) {
+    Serial.println("❌ Bus 1 sensor initialization failed!");
+  }
+  
+  Serial.println();
+
+  // ============================================================================
+  // Initialize other systems
+  // ============================================================================
+  
   wifiServer.start();
-  Serial.println("WiFi server started");
-  // Initialize actuator
+  Serial.println("✅ WiFi server started\n");
+  
   actuator.initialize();
+  Serial.println("✅ Actuator initialized\n");
   
   // Start timing
   past_time = micros();
   
-  Serial.println("System initialized");
-  Serial.println("Type ? for help");
+  Serial.println("=== System initialized ===");
+  Serial.println("Type ? for help\n");
+  
+  // Test Serial ports
+  Serial1.println("Hello from ESP32 on Serial1");
+  Serial2.println("Hello from ESP32 on Serial2");
 }
 
 void loop() {
-  // initial setup
-  static bool initLoop = false; // Flag to check if loop has been initialized
+  // Initial setup
+  static bool initLoop = false;
   if (!initLoop) {
-    initLoop = true; // Set the flag to true to indicate loop has been initialized
+    initLoop = true;
     hostCom.println("P-mixer loop start init");
-    renderer.clear(); // Clear the display with blue color
+    renderer.clear();
     renderer.drawLabel();
     renderer.drawStatusField();
     renderer.drawWiFiField();
     renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID        ");
     renderer.drawWiFiPromt("Press key to enable ");
-
     hostCom.println("P-mixer now initialized");
-  } // init loop
+  }
 
+  // ============================================================================
   // Main control loop timing
+  // ============================================================================
+  
   if ((micros() - past_time) >= sysConfig.delta_t) {
     past_time = micros();
     
-    // Update sensor readings
-    // sensors.update(sensorData);
+    // Update sensor readings from BOTH buses
+    sensors_bus0.update(sensorData_bus0);
+    sensors_bus1.update(sensorData_bus1);
     
     // Output data based on quiet mode
     outputData();
     
-    // Execute control - integrated into ActuatorControl
-    float flow_ref = sysConfig.flow_setting_is_analog ? 
-                     sensorData.flow_ref_analogue : 
-                     sysConfig.digital_flow_reference;
-    actuator.execute(flow_ref, sensorData.fused_flow, sysConfig.quiet_mode);
+    // Execute control - using Bus 0 as primary
+    actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
 
-    wifiServer.updateFlow(sensorData.flow);           // Push flow data
-    wifiServer.updatePressure(sensorData.supply_pressure);   // Push pressure data
-    wifiServer.updateValveSignal(actuator.getValveControlSignal());  // Push valve signal (also records history)
-    // wifiServer.updateMode("Manual");            // Push mode string
-
-
+    // Update WiFi server with Bus 0 data (primary)
+    wifiServer.updateFlow(sensorData_bus0.flow);
+    wifiServer.updatePressure(sensorData_bus0.supply_pressure);
+    wifiServer.updateValveSignal(actuator.getValveControlSignal());
   }
   
-  // Check for incoming commands - integrated into CommandParser
+  // ============================================================================
+  // Handle Serial communication with external microcontrollers
+  // ============================================================================
+  
+  // Check for data from Serial1
+  if (Serial1.available()) {
+    String data = Serial1.readStringUntil('\n');
+    Serial.printf("[Serial1 RX]: %s\n", data.c_str());
+    // Process data from external MCU 1
+  }
+  
+  // Check for data from Serial2
+  if (Serial2.available()) {
+    String data = Serial2.readStringUntil('\n');
+    Serial.printf("[Serial2 RX]: %s\n", data.c_str());
+    // Process data from external MCU 2
+  }
+  
+  // Send data to external microcontrollers (example)
+  static uint32_t lastSerialSend = 0;
+  if (millis() - lastSerialSend > 1000) {  // Send every 1 second
+    lastSerialSend = millis();
+    
+    // Send to Serial1
+    Serial1.printf("Flow:%0.2f,Press:%0.2f\n", 
+                   sensorData_bus0.flow, 
+                   sensorData_bus0.supply_pressure);
+    
+    // Send to Serial2
+    Serial2.printf("Flow:%0.2f,Press:%0.2f\n", 
+                   sensorData_bus1.flow, 
+                   sensorData_bus1.supply_pressure);
+  }
+
+  // ============================================================================
+  // Command parser and UI updates
+  // ============================================================================
+  
   parser.update();
   parser.processCommands(sysConfig, actuator);
 
   // Handle user interface update
-  static uint32_t UILoopStartTime = micros(); // Record the start time of the loop
-  if (micros() - UILoopStartTime > SET_UI_UPDATE_TIME) { // time loop, Check if enough time has passed since the last loop iteration
-    UILoopStartTime = micros(); // Reset the start time for the next loop
-    renderer.drawControllerMode("Idle"); // Draw the controller mode
-    ControllerMode presentMode = actuator.getControllerMode(); // Get the current controller mode
-    String ctrlMode = "Valve Set"; // Default mode string
+  static uint32_t UILoopStartTime = micros();
+  if (micros() - UILoopStartTime > SET_UI_UPDATE_TIME) {
+    UILoopStartTime = micros();
+    
+    ControllerMode presentMode = actuator.getControllerMode();
+    String ctrlMode = "Valve Set";
     switch (presentMode) {
       case PID_CONTROL:
-      ctrlMode = "PID"; // Set mode string for PID control
+        ctrlMode = "PID";
         break;
       case VALVE_SET_VALUE_CONTROL:
-        ctrlMode = "Valve Set"; // Set mode string for Valve Set control
+        ctrlMode = "Valve Set";
         break;
       case SINE_CONTROL:
-        ctrlMode = "Sine"; // Set mode string for Sine control
+        ctrlMode = "Sine";
         break;
       case STEP_CONTROL:
-        ctrlMode = "Step"; // Set mode string for Step control
+        ctrlMode = "Step";
         break;
       case TRIANGLE_CONTROL:
-        ctrlMode = "Triangle"; // Set mode string for Triangle control
+        ctrlMode = "Triangle";
         break;
       default:
-        ctrlMode = "Unknown"; // Set mode string for unknown control mode
+        ctrlMode = "Unknown";
         break;
     }
-    renderer.drawControllerMode(ctrlMode);
-    wifiServer.updateMode(ctrlMode); // Push the current mode to the WiFi server
     
-    renderer.drawFlow(String(sensorData.flow, 2) + " L/min");
-    renderer.drawPressure(String(sensorData.supply_pressure, 2) + " kPa");
+    renderer.drawControllerMode(ctrlMode);
+    wifiServer.updateMode(ctrlMode);
+    
+    // Display Bus 0 data (primary)
+    renderer.drawFlow(String(sensorData_bus0.flow, 2) + " L/min");
+    renderer.drawPressure(String(sensorData_bus0.supply_pressure, 2) + " kPa");
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal(), 2));
   }
 
+  // ============================================================================
+  // WiFi control button handling
+  // ============================================================================
+  
   if (interactionKey1.wasReleased()) {
     if (interactionKey1.wasLongPress()) {
       hostCom.println("Key1 long press (>1s)");
-      // myWiFiServer.begin();
       wifiServer.start();
-      // hostCom.println("Started WiFi");
-      // hostCom.printf("Access Point IP: %s\n", myWiFiServer.getApIpAddress());
-      // renderer.drawWiFiAPIP(myWiFiServer.getApIpAddress() + "  ", LOGGER_SSID);
       renderer.drawWiFiAPIP("WiFi ON       ", wifiServer.getApIpAddress());
       renderer.drawWiFiPromt("Press key to disable");
-      // Add QR stuff here
-
-    } else {                                    // Stop WiFi Access Point
+    } else {
       hostCom.println("interactionKey1 short press");
-      wifiServer.stop();   // Stop WiFi AP
-      // WiFi.softAPdisconnect(true);              // true = erase settings
-      // WiFi.mode(WIFI_OFF);                      // turn off WiFi radio
+      wifiServer.stop();
       hostCom.println("WiFi Access Point stopped");
       renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID        ");
       renderer.drawWiFiPromt("Press key to enable");
     }
   }
-  // Handle web requests (must call in loop!)
+  
+  // Handle web requests
   wifiServer.handleClient();
 }
