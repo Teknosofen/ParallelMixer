@@ -20,37 +20,25 @@ struct SensorData {
   float differential_pressure;  // SPD pressure in mBar
   float flow;                   // Flow in L/min
   float supply_pressure;        // SSC pressure in PSI
-  float fused_flow;            // Calculated fused flow value
-  uint16_t flow_ref_analogue;  // Analogue flow reference reading
-};
-
-struct SensorFusionConfig {
-  float diff_press_scale_factor;
-  float diff_press_exponent;
-  float flow_low_limit;
-  float flow_high_limit;
 };
 
 class SensorReader {
 public:
-  SensorReader(uint8_t flow_input_pin, uint8_t flow_output_pin);
+  // Constructor now takes TwoWire pointer for I2C bus selection
+  SensorReader(TwoWire* wire, const char* name = "Sensor");
   
   bool initialize();
   void update(SensorData& data);
-  float calculateFusedFlow(float diffPress, float flow);
   
-  void setFusionConfig(const SensorFusionConfig& config);
-  SensorFusionConfig getFusionConfig() const;
+  const char* getName() const { return _name; }
 
 private:
-  uint8_t _flow_input_pin;
-  uint8_t _flow_output_pin;
-  SensorFusionConfig _fusion_config;
+  TwoWire* _wire;              // Pointer to I2C bus (Wire or Wire1)
+  const char* _name;           // For debugging
   
   float readDifferentialPressure();
   float readFlow();
   float readSupplyPressure();
-  float readFlowSetValue();
   
   bool initSensorI2C(uint8_t address, uint8_t cmd1, uint8_t cmd2, const char* name);
 };

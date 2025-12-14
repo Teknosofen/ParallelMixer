@@ -5,7 +5,7 @@
 #include <Arduino.h>
 #include "main.hpp"
 #include <TFT_eSPI.h>
-#include "PinConfig.h"            // Pin configuration
+#include "PinConfig.h"            // NEW: Pin configuration
 #include "SensorReader.hpp"
 #include "ActuatorControl.hpp"
 #include "CommandParser.hpp"
@@ -19,8 +19,8 @@ TFT_eSprite spriteLeft = TFT_eSprite(&tft);
 ImageRenderer renderer(tft);
 
 // Two sensor readers on separate I2C buses
-SensorReader sensors_bus0(&Wire, "Bus0");   // GPIO43/44 - includes SFM3505
-SensorReader sensors_bus1(&Wire1, "Bus1");  // GPIO10/11
+SensorReader sensors_bus0(&Wire, "Bus0");
+SensorReader sensors_bus1(&Wire1, "Bus1");
 
 ActuatorControl actuator(Valve_ctrl_Analogue_pin);
 CommandParser parser;
@@ -30,7 +30,7 @@ PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
 
 // System configuration
 SystemConfig sysConfig;
-SensorData sensorData_bus0;  // Data from Bus 0 sensors (includes SFM3505)
+SensorData sensorData_bus0;  // Data from Bus 0 sensors
 SensorData sensorData_bus1;  // Data from Bus 1 sensors
 
 // Timing
@@ -39,17 +39,14 @@ uint32_t past_time;
 void outputData() {
   // Output data from Bus 0 (primary sensors)
   switch (sysConfig.quiet_mode) {
-    case 0:  // Verbose: dP, Flow, SupplyP, SFM3505, Valve signal
+    case 0:  // Verbose: dP, Flow, SupplyP, Valve signal
       Serial.print("[Bus0] ");
-      Serial.print("dP:");
       Serial.print(sensorData_bus0.differential_pressure, 2);
-      Serial.print(" Flow:");
+      Serial.print(" ");
       Serial.print(sensorData_bus0.flow, 2);
-      Serial.print(" SupplyP:");
+      Serial.print(" ");
       Serial.print(sensorData_bus0.supply_pressure, 2);
-      Serial.print(" SFM3505_O2:");
-      Serial.print(sensorData_bus0.sfm3505_o2_flow, 2);
-      Serial.print(" Valve:");
+      Serial.print(" ");
       Serial.println(actuator.getValveControlSignal());
       break;
       
@@ -66,9 +63,7 @@ void outputData() {
         Serial.print(" V ");
         Serial.print(actuator.getValveControlSignal());
         Serial.print(" F ");
-        Serial.print(sensorData_bus0.flow);
-        Serial.print(" O2 ");
-        Serial.println(sensorData_bus0.sfm3505_o2_flow);
+        Serial.println(sensorData_bus0.flow);
       }
       break;
       
@@ -83,24 +78,22 @@ void outputData() {
       Serial.println(actuator.getValveControlSignal());
       break;
       
-    case 5:  // Flow and Supply Pressure + SFM3505
+    case 5:  // Flow and Supply Pressure
       Serial.print("Flow: ");
       Serial.print(sensorData_bus0.flow, 2);
       Serial.print(" SupplyP: ");
-      Serial.print(sensorData_bus0.supply_pressure, 2);
-      Serial.print(" SFM3505_O2: ");
-      Serial.println(sensorData_bus0.sfm3505_o2_flow, 2);
+      Serial.println(sensorData_bus0.supply_pressure, 2);
       break;
       
-    case 6:  // SFM3505 data from both buses
-      Serial.print("[Bus0] O2:");
-      Serial.print(sensorData_bus0.sfm3505_o2_flow, 2);
-      Serial.print(" Air:");
-      Serial.print(sensorData_bus0.sfm3505_air_flow, 2);
-      Serial.print(" | [Bus1] O2:");
-      Serial.print(sensorData_bus1.sfm3505_o2_flow, 2);
-      Serial.print(" Air:");
-      Serial.println(sensorData_bus1.sfm3505_air_flow, 2);
+    case 6:  // Flow, SupplyP from both buses
+      Serial.print("[Bus0] ");
+      Serial.print(sensorData_bus0.flow, 2);
+      Serial.print(" ");
+      Serial.print(sensorData_bus0.supply_pressure, 2);
+      Serial.print(" | [Bus1] ");
+      Serial.print(sensorData_bus1.flow, 2);
+      Serial.print(" ");
+      Serial.println(sensorData_bus1.supply_pressure, 2);
       break;
   }
 }
@@ -122,7 +115,7 @@ void setup() {
   parser.begin(250000);
   delay(2000);  // Reduced from 12000 - usually not needed with USB CDC
   
-  Serial.println("\n=== P-Mixer with SFM3505 O2 Flow Sensor ===\n");
+  Serial.println("\n=== P-Mixer Dual I2C + Dual Serial Setup ===\n");
 
   // ============================================================================
   // Initialize I2C Buses BEFORE sensors
@@ -130,9 +123,9 @@ void setup() {
   
   Serial.println("Initializing I2C buses...");
   
-  // I2C Bus 0 (Wire) - GPIO43/44 - SFM3505 on this bus
+  // I2C Bus 0 (Wire) - GPIO43/44
   Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, 500000);
-  Serial.printf("✅ I2C Bus 0: SDA=GPIO%d, SCL=GPIO%d (SFM3505 here)\n", I2C0_SDA_PIN, I2C0_SCL_PIN);
+  Serial.printf("✅ I2C Bus 0: SDA=GPIO%d, SCL=GPIO%d\n", I2C0_SDA_PIN, I2C0_SCL_PIN);
   
   // I2C Bus 1 (Wire1) - GPIO10/11
   Wire1.begin(I2C1_SDA_PIN, I2C1_SCL_PIN, 500000);
@@ -160,7 +153,7 @@ void setup() {
 
   Serial.println("Initializing sensors...");
   
-  // Initialize sensors on Bus 0 (includes SFM3505 at 0x2E)
+  // Initialize sensors on Bus 0
   if (!sensors_bus0.initialize()) {
     Serial.println("❌ Bus 0 sensor initialization failed!");
   }
@@ -186,7 +179,6 @@ void setup() {
   past_time = micros();
   
   Serial.println("=== System initialized ===");
-  Serial.println("SFM3505 O2 flow will be read from Bus 0 (GPIO43/44)");
   Serial.println("Type ? for help\n");
   
   // Test Serial ports
@@ -216,50 +208,18 @@ void loop() {
   if ((micros() - past_time) >= sysConfig.delta_t) {
     past_time = micros();
     
-    // ========================================================================
-    // Read LEGACY sensors from both buses
-    // ========================================================================
+    // Update sensor readings from BOTH buses
     sensors_bus0.update(sensorData_bus0);
     sensors_bus1.update(sensorData_bus1);
-    
-    // ========================================================================
-    // Read SFM3505 O2 flow from Bus 0 (GPIO43/44)
-    // ========================================================================
-    float sfm_air, sfm_o2;
-    if (sensors_bus0.readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      // Store in sensorData structure
-      sensorData_bus0.sfm3505_air_flow = sfm_air;
-      sensorData_bus0.sfm3505_o2_flow = sfm_o2;
-    } else {
-      // SFM3505 read failed - set to 0
-      sensorData_bus0.sfm3505_air_flow = 0.0;
-      sensorData_bus0.sfm3505_o2_flow = 0.0;
-    }
-    
-    // Optional: Also read SFM3505 from Bus 1 if present
-    if (sensors_bus1.readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      sensorData_bus1.sfm3505_air_flow = sfm_air;
-      sensorData_bus1.sfm3505_o2_flow = sfm_o2;
-    }
     
     // Output data based on quiet mode
     outputData();
     
-    // ========================================================================
     // Execute control - using Bus 0 as primary
-    // Can use either legacy flow OR SFM3505 O2 flow
-    // ========================================================================
-    
-    // Option 1: Use legacy flow sensor
     actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
-    
-    // Option 2: Use SFM3505 O2 flow (uncomment to use)
-    // actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.sfm3505_o2_flow, sysConfig.quiet_mode);
 
-    // ========================================================================
     // Update WiFi server with Bus 0 data (primary)
-    // ========================================================================
-    wifiServer.updateFlow(sensorData_bus0.sfm3505_o2_flow);  // Send SFM3505 O2 flow to web
+    wifiServer.updateFlow(sensorData_bus0.flow);
     wifiServer.updatePressure(sensorData_bus0.supply_pressure);
     wifiServer.updateValveSignal(actuator.getValveControlSignal());
   }
@@ -282,22 +242,20 @@ void loop() {
     // Process data from external MCU 2
   }
   
-  // Send data to external microcontrollers (including SFM3505 data)
+  // Send data to external microcontrollers (example)
   static uint32_t lastSerialSend = 0;
   if (millis() - lastSerialSend > 1000) {  // Send every 1 second
     lastSerialSend = millis();
     
-    // Send to Serial1 - include SFM3505 O2 flow
-    Serial1.printf("Flow:%0.2f,Press:%0.2f,O2:%0.2f\n", 
+    // Send to Serial1
+    Serial1.printf("Flow:%0.2f,Press:%0.2f\n", 
                    sensorData_bus0.flow, 
-                   sensorData_bus0.supply_pressure,
-                   sensorData_bus0.sfm3505_o2_flow);
+                   sensorData_bus0.supply_pressure);
     
     // Send to Serial2
-    Serial2.printf("Flow:%0.2f,Press:%0.2f,O2:%0.2f\n", 
+    Serial2.printf("Flow:%0.2f,Press:%0.2f\n", 
                    sensorData_bus1.flow, 
-                   sensorData_bus1.supply_pressure,
-                   sensorData_bus1.sfm3505_o2_flow);
+                   sensorData_bus1.supply_pressure);
   }
 
   // ============================================================================
@@ -338,8 +296,8 @@ void loop() {
     renderer.drawControllerMode(ctrlMode);
     wifiServer.updateMode(ctrlMode);
     
-    // Display Bus 0 data (primary) - now showing SFM3505 O2 flow
-    renderer.drawFlow(String(sensorData_bus0.sfm3505_o2_flow, 2) + " slm O2");  // SFM3505 O2
+    // Display Bus 0 data (primary)
+    renderer.drawFlow(String(sensorData_bus0.flow, 2) + " L/min");
     renderer.drawPressure(String(sensorData_bus0.supply_pressure, 2) + " kPa");
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal(), 2));
   }
