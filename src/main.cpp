@@ -18,7 +18,7 @@ TFT_eSPI tft = TFT_eSPI();
 TFT_eSprite spriteLeft = TFT_eSprite(&tft);
 ImageRenderer renderer(tft);
 
-// NEW: Two sensor readers on separate I2C buses
+// Two sensor readers on separate I2C buses
 SensorReader sensors_bus0(&Wire, "Bus0");
 SensorReader sensors_bus1(&Wire1, "Bus1");
 
