@@ -127,10 +127,32 @@ void outputData() {
 }
 
 void setup() {
-  // Initialize USB Serial FIRST before anything else - use default USB CDC
+  // ============================================================================
+  // CRITICAL: SFM3505 Power-Up Reset - MUST BE FIRST!
+  // ============================================================================
+  // Per Sensirion documentation: SDA/SCL must be LOW for 31ms after power-on
+  // This MUST happen immediately, before any other initialization
+
+  // Step 1: Disable I2C pull-ups by controlling GPIO21
+  pinMode(I2C0_PULLUP_CTRL_PIN, OUTPUT);
+  digitalWrite(I2C0_PULLUP_CTRL_PIN, LOW);  // Turn OFF pull-ups via transistor
+
+  // Step 2: Actively pull SDA/SCL LOW via GPIO
+  pinMode(I2C0_SDA_PIN, OUTPUT);
+  pinMode(I2C0_SCL_PIN, OUTPUT);
+  digitalWrite(I2C0_SDA_PIN, LOW);
+  digitalWrite(I2C0_SCL_PIN, LOW);
+
+  // Step 3: Hold LOW for 35ms (> 31ms requirement)
+  delay(35);
+
+  // Initialize USB Serial - use default USB CDC
   Serial.begin();  // For ESP32-S3 USB CDC, no baud rate needed
   delay(2500);  // Give more time for Serial to initialize
   Serial.println("\n=== Boot Start ===");
+  Serial.println("✅ SFM3505 reset sequence applied:");
+  Serial.println("   - Pull-ups disabled via GPIO21");
+  Serial.println("   - SDA/SCL held LOW for 35ms from power-on");
   Serial.println(parallelVerLbl);
   Serial.print("Build: ");
   Serial.print(__DATE__);
@@ -179,29 +201,49 @@ void setup() {
 
   hostCom.println("Initializing I2C buses...");
 
-  // I2C Bus 0 (Wire) - GPIO43/44 - SFM3505 on this bus
-  Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, 100000);  // Reduced to 100kHz for stability
-  hostCom.printf("✅ I2C Bus 0: SDA=GPIO%d, SCL=GPIO%d (SFM3505 here)\n", I2C0_SDA_PIN, I2C0_SCL_PIN);
+  // Initialize I2C Bus 0 (Wire) - GPIO43/44 - SFM3505 on this bus
+  // Note: Reset sequence was already applied at the very start of setup()
+  Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, 100000);  // 100kHz for stability
 
-  // Quick scan of common I2C addresses only (much faster than full scan)
-  hostCom.println("Scanning I2C bus (common addresses only)...");
+  // NOW enable the pull-up resistors via GPIO21 (after I2C init)
+  digitalWrite(I2C0_PULLUP_CTRL_PIN, HIGH);  // Turn ON pull-ups via transistor
+  hostCom.printf("✅ I2C Bus 0: SDA=GPIO%d, SCL=GPIO%d (Pull-ups enabled via GPIO%d)\n",
+                 I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_PULLUP_CTRL_PIN);
+  delay(10);  // Additional settling time after pull-up enable
+
+  // Quick scan of expected I2C addresses only
+  hostCom.println("Scanning I2C bus - checking expected addresses...");
   int deviceCount = 0;
-  // Common sensor addresses: 0x25(SPD), 0x2E(SFM3505), 0x40(SFM), 0x58(SSC), 0x76(BME280)
-  byte commonAddresses[] = {0x25, 0x2E, 0x40, 0x58, 0x76};
-  for (byte i = 0; i < sizeof(commonAddresses); i++) {
-    byte address = commonAddresses[i];
+
+  // List of expected sensor addresses
+  byte expectedAddresses[] = {0x2E, 0x25, 0x40, 0x58, 0x76};
+  const char* deviceNames[] = {"SFM3505", "SPD sensor", "Legacy SFM", "SSC sensor", "BME280"};
+
+  for (int i = 0; i < 5; i++) {
+    byte address = expectedAddresses[i];
     Wire.beginTransmission(address);
     byte error = Wire.endTransmission();
+
     if (error == 0) {
-      hostCom.printf("  Device found at address 0x%02X\n", address);
+      hostCom.printf("  ✅ Device found at address 0x%02X (%s)\n", address, deviceNames[i]);
       deviceCount++;
+    } else {
+      hostCom.printf("  ❌ No device at 0x%02X (%s) - Error: %d\n", address, deviceNames[i], error);
     }
+
+    delay(5);  // Small delay for stability
   }
+
   if (deviceCount == 0) {
-    hostCom.println("  ⚠️ No I2C devices found at common addresses");
-    hostCom.println("     (Scanned: 0x25, 0x2E, 0x40, 0x58, 0x76)");
+    hostCom.println("\n  ⚠️⚠️⚠️ NO I2C DEVICES FOUND! ⚠️⚠️⚠️");
+    hostCom.println("  Despite signals on oscilloscope, no device is ACKing.");
+    hostCom.println("  Possible causes:");
+    hostCom.println("  1. Sensor in wrong mode or needs power cycle");
+    hostCom.println("  2. Pull-up resistors too weak/strong");
+    hostCom.println("  3. Timing issues - try different I2C speed");
+    hostCom.println("  4. Sensor damaged");
   } else {
-    hostCom.printf("  Found %d device(s)\n", deviceCount);
+    hostCom.printf("\n  ✅ Found %d device(s) on I2C bus\n", deviceCount);
   }
 
   // I2C Bus 1 (Wire1) - GPIO10/11 - DISABLED FOR NOW

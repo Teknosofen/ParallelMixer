@@ -13,8 +13,11 @@
 // ============================================================================
 
 // I2C Bus 0 (Wire) - First sensor group (Flow + Pressure sensors #1)
-#define I2C0_SDA_PIN 43
-#define I2C0_SCL_PIN 44
+#define I2C0_SDA_PIN  43
+#define I2C0_SCL_PIN  44
+
+// I2C Bus 0 Pull-up Control - Controls power to pull-up resistors
+#define I2C0_PULLUP_CTRL_PIN 21  // Set HIGH to enable pull-ups, LOW to disable
 
 // I2C Bus 1 (Wire1) - Second sensor group (Flow + Pressure sensors #2)
 #define I2C1_SDA_PIN 10
@@ -24,9 +27,9 @@
 // SERIAL PORT PINS - For external microcontroller communication
 // ============================================================================
 
-// Serial1 - First external microcontroller
-#define SERIAL1_TX_PIN 1
-#define SERIAL1_RX_PIN 2
+// Serial1 - First external microcontroller (hardware UART1)
+#define SERIAL1_TX_PIN 17
+#define SERIAL1_RX_PIN 18
 
 // Serial2 - Second external microcontroller  
 #define SERIAL2_TX_PIN 12
@@ -50,8 +53,9 @@
 /*
 USED PINS (This configuration):
 ✅ GPIO43, 44  - I2C Bus 0 (SDA, SCL)
-✅ GPIO10, 11  - I2C Bus 1 (SDA, SCL)  
-✅ GPIO1, 2    - Serial1 (TX, RX)
+✅ GPIO21      - I2C Bus 0 pull-up control (for SFM3505 reset)
+✅ GPIO10, 11  - I2C Bus 1 (SDA, SCL)
+✅ GPIO17, 18  - Serial1 (TX, RX) - Hardware UART1
 ✅ GPIO12, 13  - Serial2 (TX, RX)
 
 RESERVED BY DISPLAY (Can't use):
@@ -64,7 +68,7 @@ INTERNAL BUTTONS (Not on header):
 ⚠️ GPIO0, 14   - User buttons
 
 STILL AVAILABLE:
-✅ GPIO3       - Available for other use (ADC capable if needed)
+✅ GPIO1, 2, 3 - Available for other use (ADC capable if needed)
 
 NOTES:
 - GPIO43/44 also used for Serial when USB CDC is off
@@ -79,23 +83,23 @@ NOTES:
 /*
 If you don't need Serial2, you can free up GPIO12/13:
 
-OPTION A: Use GPIO12/13 for other purposes
+OPTION A: Use GPIO12/13 for other purposes (current configuration)
 #define I2C0_SDA_PIN 43
 #define I2C0_SCL_PIN 44
 #define I2C1_SDA_PIN 10
-#define I2C1_SDA_PIN 11
-#define SERIAL1_TX_PIN 1
-#define SERIAL1_RX_PIN 2
-// GPIO12, 13 available for other use
+#define I2C1_SCL_PIN 11
+#define SERIAL1_TX_PIN 17  // Hardware UART1
+#define SERIAL1_RX_PIN 18  // Hardware UART1
+// GPIO1, 2, 3, 12, 13 available for other use
 
-OPTION B: Move Serial1 to free up GPIO1/2
+OPTION B: Move I2C to different pins
 #define I2C0_SDA_PIN 43
 #define I2C0_SCL_PIN 44
 #define I2C1_SDA_PIN 1
 #define I2C1_SCL_PIN 2
-#define SERIAL1_TX_PIN 10
-#define SERIAL1_RX_PIN 11
-// GPIO12, 13 still available
+#define SERIAL1_TX_PIN 17  // Hardware UART1
+#define SERIAL1_RX_PIN 18  // Hardware UART1
+// GPIO3, 10, 11, 12, 13 available for other use
 */
 
 // ============================================================================
@@ -103,23 +107,36 @@ OPTION B: Move Serial1 to free up GPIO1/2
 // ============================================================================
 
 /*
-I2C BUS 0 (Sensors Group 1):
-├─ GPIO43 (SDA) ──┬── 4.7kΩ to 3.3V
+I2C BUS 0 (Sensors Group 1) - WITH CONTROLLED PULL-UPS FOR SFM3505:
+├─ GPIO21 (Pull-up Control) ──┬── NPN transistor base (via 1kΩ resistor)
+│                             └── Controls power to pull-up resistors
+│
+├─ NPN Transistor Collector ──── 3.3V supply for pull-ups
+├─ NPN Transistor Emitter ────┬── 4.7kΩ pull-up to GPIO43 (SDA)
+│                             └── 4.7kΩ pull-up to GPIO44 (SCL)
+│
+├─ GPIO43 (SDA) ──┬── 4.7kΩ to transistor emitter
+│                 ├── SFM3505 (0x2E) - requires controlled pull-ups!
 │                 ├── SFM Sensor 1 (0x40)
 │                 ├── SPD Sensor 1 (0x25)
 │                 └── SSC Sensor 1 (0x58)
-└─ GPIO44 (SCL) ──┴── 4.7kΩ to 3.3V
+│
+└─ GPIO44 (SCL) ──┴── 4.7kΩ to transistor emitter
+
+NOTE: SFM3505 requires pull-ups to be OFF during first 31ms after power-on!
+      GPIO21 controls an NPN transistor that switches the pull-up power.
+      This prevents the sensor from being partially powered via ESD diodes.
 
 I2C BUS 1 (Sensors Group 2):
-├─ GPIO10 (SDA) ──┬── 4.7kΩ to 3.3V
+├─ GPIO10 (SDA) ──┬── 4.7kΩ to 3.3V (standard, always on)
 │                 ├── SFM Sensor 2 (0x40)
 │                 ├── SPD Sensor 2 (0x25)
 │                 └── SSC Sensor 2 (0x58)
 └─ GPIO11 (SCL) ──┴── 4.7kΩ to 3.3V
 
-SERIAL1 (External MCU 1):
-├─ GPIO1 (TX) ────── RX of external MCU 1
-└─ GPIO2 (RX) ────── TX of external MCU 1
+SERIAL1 (External MCU 1) - Hardware UART1:
+├─ GPIO17 (TX) ───── RX of external MCU 1
+└─ GPIO18 (RX) ───── TX of external MCU 1
 
 SERIAL2 (External MCU 2):
 ├─ GPIO12 (TX) ───── RX of external MCU 2
@@ -127,6 +144,25 @@ SERIAL2 (External MCU 2):
 
 Common connections:
 └─ GND ───────────── All devices must share common ground
+
+TRANSISTOR CIRCUIT FOR PULL-UP CONTROL:
+                        +3.3V
+                          │
+                          │
+                    ┌─────┴─────┐
+                    │           │
+                  4.7kΩ       4.7kΩ
+                    │           │
+                    ├───────────┤ (Pull-up rail)
+                    │           │
+                    │         Collector
+                  SDA         ──┐
+                    │           │ NPN (2N3904 or similar)
+                  SCL         Emitter
+                    │           │
+                    │           GND
+                    │
+                  Base ─── 1kΩ ─── GPIO21
 */
 
 #endif // PIN_CONFIG_H

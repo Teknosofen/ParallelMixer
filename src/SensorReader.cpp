@@ -17,13 +17,27 @@ bool SensorReader::initialize() {
   // Initialize SFM3505 flow sensor ONLY (legacy sensors disabled)
   // ============================================================================
 
+  // First, check if device responds at address 0x2E
+  Serial.printf("[%s] Checking for SFM3505 at address 0x%02X...\n", _name, I2Cadr_SFM3505);
+  _wire->beginTransmission(I2Cadr_SFM3505);
+  byte error = _wire->endTransmission();
+
+  if (error == 0) {
+    Serial.printf("[%s] ✅ Device ACK received at 0x%02X\n", _name, I2Cadr_SFM3505);
+  } else {
+    Serial.printf("[%s] ❌ No ACK from device at 0x%02X (error: %d)\n", _name, I2Cadr_SFM3505, error);
+    Serial.printf("[%s]    Check: sensor model, address, wiring\n", _name);
+    return false;
+  }
+
   // Start SFM3505 continuous measurement
+  Serial.printf("[%s] Starting SFM3505 continuous measurement...\n", _name);
   if (startSFM3505Measurement()) {
-    Serial.printf("[%s] ✅ SFM3505 initialized and started\n", _name);
+    Serial.printf("[%s] ✅ SFM3505 initialized and measurement started\n", _name);
     return true;
   } else {
-    Serial.printf("[%s] ⚠️ SFM3505 not detected - I2C scan showed no devices\n", _name);
-    Serial.printf("[%s]    Check wiring: SDA=GPIO43, SCL=GPIO44\n", _name);
+    Serial.printf("[%s] ⚠️ SFM3505 responded but failed to start measurement\n", _name);
+    Serial.printf("[%s]    Device may not be SFM3505 or is in wrong mode\n", _name);
     return false;
   }
 
@@ -216,14 +230,21 @@ bool SensorReader::stopSFM3505Measurement() {
 // ============================================================================
 
 bool SensorReader::sendSFM3505Command(uint16_t command) {
+  Serial.printf("[%s] Sending SFM3505 command: 0x%04X to address 0x%02X\n", _name, command, I2Cadr_SFM3505);
+
   _wire->beginTransmission(I2Cadr_SFM3505);
   _wire->write((uint8_t)(command >> 8));    // MSB
   _wire->write((uint8_t)(command & 0xFF));  // LSB
-  
-  if (_wire->endTransmission() != 0) {
+
+  byte error = _wire->endTransmission();
+
+  if (error != 0) {
+    Serial.printf("[%s] ❌ Command send failed with error: %d\n", _name, error);
+    Serial.printf("[%s]    Error codes: 1=data too long, 2=NACK on addr, 3=NACK on data, 4=other, 5=timeout\n", _name);
     return false;
   }
-  
+
+  Serial.printf("[%s] ✅ Command sent successfully\n", _name);
   return true;
 }
 
