@@ -8,26 +8,35 @@ SensorReader::SensorReader(TwoWire* wire, const char* name)
 bool SensorReader::initialize() {
   // NOTE: Wire.begin() should be called in main() before calling initialize()
   // This allows main to control I2C pin configuration
-  
-  _wire->setClock(500000);
-  
+
+  _wire->setClock(100000);  // 100kHz for better reliability
+
   Serial.printf("Initializing %s sensors...\n", _name);
-  
+
   // ============================================================================
-  // Initialize SFM3505 flow sensor (minimal implementation)
+  // Initialize SFM3505 flow sensor ONLY (legacy sensors disabled)
   // ============================================================================
-  
+
   // Start SFM3505 continuous measurement
   if (startSFM3505Measurement()) {
     Serial.printf("[%s] ✅ SFM3505 initialized and started\n", _name);
+    return true;
   } else {
-    Serial.printf("[%s] ⚠️ SFM3505 not detected or initialization failed\n", _name);
+    Serial.printf("[%s] ⚠️ SFM3505 not detected - I2C scan showed no devices\n", _name);
+    Serial.printf("[%s]    Check wiring: SDA=GPIO43, SCL=GPIO44\n", _name);
+    return false;
   }
-  
+
   // ============================================================================
-  // Initialize LEGACY sensors (keep existing functionality)
+  // LEGACY SENSORS DISABLED - ONLY USING SFM3505
   // ============================================================================
-  
+  // The following legacy sensor code has been commented out:
+  // - Legacy SFM sensor at 0x40
+  // - SPD pressure sensor at 0x25
+  // - SSC sensor at 0x58
+  //
+  // To re-enable, uncomment the code below:
+  /*
   // SW reset Sensirion flow measurement (legacy sensor at 0x40)
   _wire->beginTransmission(I2Cadr_SFM);
   _wire->write(SFM_com0);
@@ -37,7 +46,7 @@ bool SensorReader::initialize() {
     return false;
   }
   delay(70);
-  
+
   // SW reset Sensirion pressure measurement
   _wire->beginTransmission(I2Cadr_SPD);
   _wire->write(0x00);
@@ -47,17 +56,18 @@ bool SensorReader::initialize() {
     return false;
   }
   delay(10);
-  
+
   // Start continuous pressure measurement
   if (!initSensorI2C(I2Cadr_SPD, SPD_com1, SPD_com2, "SPD")) return false;
   delay(10);
-  
+
   // Start continuous flow measurement
   if (!initSensorI2C(I2Cadr_SFM, SFM_com1, SFM_com2, "SFM")) return false;
   delay(10);
-  
+
   Serial.printf("[%s] ✅ All sensors initialized\n", _name);
   return true;
+  */
 }
 
 bool SensorReader::initSensorI2C(uint8_t address, uint8_t cmd1, uint8_t cmd2, const char* name) {
@@ -72,12 +82,18 @@ bool SensorReader::initSensorI2C(uint8_t address, uint8_t cmd1, uint8_t cmd2, co
 }
 
 void SensorReader::update(SensorData& data) {
-  // This method updates LEGACY sensor readings (SPD, legacy SFM, SSC)
+  // LEGACY SENSORS DISABLED - only using SFM3505
+  // Set all legacy sensor data to 0 to avoid I2C errors
   // For SFM3505, use the dedicated readSFM3505xxx() methods
-  
-  data.differential_pressure = readDifferentialPressure();
-  data.flow = readFlow();  // Legacy SFM sensor at 0x40
-  data.supply_pressure = readSupplyPressure();
+
+  data.differential_pressure = 0.0;
+  data.flow = 0.0;  // Legacy SFM sensor disabled
+  data.supply_pressure = 0.0;
+
+  // To re-enable legacy sensors, uncomment:
+  // data.differential_pressure = readDifferentialPressure();
+  // data.flow = readFlow();  // Legacy SFM sensor at 0x40
+  // data.supply_pressure = readSupplyPressure();
 }
 
 float SensorReader::readDifferentialPressure() {

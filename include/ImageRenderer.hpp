@@ -11,6 +11,7 @@ public:
     void begin();
     void clear();
     void initPositions();
+    void showBootScreen(const char* version, const char* compileDate, const char* compileTime);
     
     // Basic drawing
     void drawLabel();

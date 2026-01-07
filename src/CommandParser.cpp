@@ -6,8 +6,13 @@ CommandParser::CommandParser()
 }
 
 void CommandParser::begin(unsigned long baud_rate) {
-  Serial.begin(baud_rate);
+  // Serial is already initialized in setup(), just configure the parser
   _command_str.reserve(64);
+
+  // Only print if Serial is connected (non-blocking check)
+  if (Serial) {
+    Serial.println("CommandParser initialized");
+  }
 }
 
 void CommandParser::update() {

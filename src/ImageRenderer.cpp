@@ -1,20 +1,42 @@
 #include "ImageRenderer.hpp"
 #include "Free_Fonts.h"
-#include "main.hpp"
+#include <main.hpp>
 
 ImageRenderer::ImageRenderer(TFT_eSPI &display) : tft(display) {}
 
 void ImageRenderer::begin() {
     tft.init();
     tft.setRotation(1);
-    tft.fillScreen(TFT_LOGOBACKGROUND); // Clear the display
-    tft.setTextColor(TFT_WHITE, TFT_LOGOBACKGROUND  ); // Set text color and background
-    tft.setCursor(10, 10); // Set cursor position
-    tft.println("P-mixer Ready"); // Print a message on the display
-    tft.setCursor(10, 30); // Set cursor position
-    tft.println(parallelVerLbl); // Print version on the display
+    tft.fillScreen(TFT_LOGOBACKGROUND);
+    tft.setTextColor(TFT_WHITE, TFT_LOGOBACKGROUND);
     tft.setTextSize(defaultTextSize);
     initPositions();
+}
+
+void ImageRenderer::showBootScreen(const char* version, const char* compileDate, const char* compileTime) {
+    tft.fillScreen(TFT_LOGOBACKGROUND);
+    tft.setTextColor(TFT_WHITE, TFT_LOGOBACKGROUND);
+    tft.setTextSize(1);
+
+    // Center the boot screen content
+    int centerY = tft.height() / 2;
+
+    // Draw title
+    tft.setFreeFont(&FreeSansBold12pt7b);
+    drawCenteredText("P-Mixer", centerY - 60);
+
+    // Draw version label
+    tft.setFreeFont(&FreeSans9pt7b);
+    drawCenteredText(String(version), centerY - 20);
+
+    // Draw compile date and time
+    tft.setFreeFont(&FreeSans9pt7b);
+    String buildInfo = String("Build: ") + compileDate;
+    drawCenteredText(buildInfo, centerY + 10);
+    drawCenteredText(String(compileTime), centerY + 35);
+
+    // Reset to default font
+    tft.setTextSize(defaultTextSize);
 }
 
 void ImageRenderer::clear() {
