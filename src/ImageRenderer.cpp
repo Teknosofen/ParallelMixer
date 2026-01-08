@@ -127,7 +127,7 @@ void ImageRenderer::drawLabel() {
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND); // Set text color and background
     tft.setTextSize(1); // Set text size
     // tft.setCursor(labelPos.x, labelPos.y); // Set cursor position
-    tft.drawString("P-Mixer", labelPos.x, labelPos.y); // Print a message on the display
+    tft.drawString("ParallellMixer", labelPos.x, labelPos.y); // Print a message on the display
     // tft.setCursor(versionPos.x, versionPos.y); // Set cursor position for next line
     tft.setFreeFont(FSS9); 
     // tft.setTextSize(smallTextSize); // Set text size for the next line
@@ -138,14 +138,15 @@ void ImageRenderer::drawWiFiField() {
     tft.setFreeFont(FSS9);   
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(wiFiRectPos.x, wiFiRectPos.y, 150, 70, 10, TFT_WHITE); // White border around the screen
+    tft.drawRoundRect(wiFiRectPos.x, wiFiRectPos.y, 145, 70, 10, TFT_WHITE); // White border around the screen
     tft.drawString("WiFi  ", wiFiLabelPos.x, wiFiLabelPos.y); // Print a message on the display  
 }
+
 void ImageRenderer::drawStatusField() {
     tft.setFreeFont(FSS9);   
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 150, 110, 10, TFT_WHITE); // White border around the screendelay(10000);
+    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 120, 10, TFT_WHITE); // White border around the screen
     tft.drawString("Status  ", statusLabelPos.x, statusLabelPos.y); // Print a message on the display  
 }
 
@@ -217,48 +218,32 @@ void ImageRenderer::drawValveCtrlSignal(const String& signal) {
 }
 
 void ImageRenderer::initPositions() {
-
-    logoPos.x = 0;
-    logoPos.y = 0;
-
-    labelPos.x = 70;
+    labelPos.x = 10;
     labelPos.y = 10;
 
-    versionPos.x = 290;
-    versionPos.y = 25; 
-  
-    servoIDPos.x = labelPos.x;
-    servoIDPos.y = 60;  
-  
-    timePos.x = labelPos.x;
-    timePos.y = 80;
-  
+    versionPos.x = 285;
+    versionPos.y = 25;
+
     wiFiRectPos.x = 5;
-    wiFiRectPos.y = 100; 
-  
+    wiFiRectPos.y = 100;
+
     wiFiLabelPos.x = wiFiRectPos.x + 5;
     wiFiLabelPos.y = wiFiRectPos.y - 10;
-     
+
     wiFiAPIPPos.x = wiFiLabelPos.x;
-    wiFiAPIPPos.y = wiFiLabelPos.y + 20; 
+    wiFiAPIPPos.y = wiFiLabelPos.y + 20;
 
     wiFiSSIDPos.x = wiFiLabelPos.x;
     wiFiSSIDPos.y = wiFiLabelPos.y + 20 + 20;
 
     wiFiPromptPos.x = wiFiLabelPos.x;
-    wiFiPromptPos.y = wiFiLabelPos.y + 20 + 20 + 20; 
+    wiFiPromptPos.y = wiFiLabelPos.y + 20 + 20 + 20;
 
-    statusRectPos.x = 170;
-    statusRectPos.y = 60;
+    statusRectPos.x = 160;
+    statusRectPos.y = 50;
 
-    statusLabelPos.x = statusRectPos.x + 5 ;
-    statusLabelPos.y = statusRectPos.y - 10 ;  
-  
-    statusCOMPos.x = 0;               // will be overridden by function
-    statusCOMPos.y = 108; 
-  
-    statusSDPos.x = 0;                // will be overridden by function
-    statusSDPos.y = 138; 
+    statusLabelPos.x = statusRectPos.x + 5;
+    statusLabelPos.y = statusRectPos.y - 10;
 
     statusFlowPos.x = statusLabelPos.x;
     statusFlowPos.y = statusLabelPos.y + 20;
@@ -271,7 +256,4 @@ void ImageRenderer::initPositions() {
 
     statusControllerModePos.x = statusLabelPos.x;
     statusControllerModePos.y = statusLabelPos.y + 80;
-
-    phasePos.x = 180;
-    phasePos.y = 140;
 }

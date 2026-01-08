@@ -19,6 +19,9 @@
 // I2C Bus 0 Pull-up Control - Controls power to pull-up resistors
 #define I2C0_PULLUP_CTRL_PIN 21  // Set HIGH to enable pull-ups, LOW to disable
 
+// I2C Bus 0 Clock Frequency
+#define I2C0_CLOCK_FREQ 400000  // 400kHz for better reliability
+
 // I2C Bus 1 (Wire1) - Second sensor group (Flow + Pressure sensors #2)
 #define I2C1_SDA_PIN 10
 #define I2C1_SCL_PIN 11

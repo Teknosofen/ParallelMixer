@@ -22,8 +22,8 @@ struct PIDConfig {
 };
 
 struct SignalGeneratorConfig {
-  uint16_t offset;
-  uint16_t amplitude;
+  float offset;           // Offset as percentage (0.0-100.0%)
+  float amplitude;        // Amplitude as percentage (0.0-100.0%)
   uint16_t samples_per_period;
 };
 
@@ -55,17 +55,25 @@ public:
   SignalGeneratorConfig getSignalGeneratorConfig() const;
   uint16_t updateSignalGenerator();
   
-  // Direct valve control
-  void setValveControlSignal(uint16_t signal);
-  uint16_t getValveControlSignal() const;
+  // Direct valve control (percentage-based interface)
+  void setValveControlSignal(float percent);  // 0.0-100.0%
+  float getValveControlSignal() const;        // Returns 0.0-100.0%
   
   // Output method selection
   void setExternalPWM(bool external);
   bool isExternalPWM() const;
-  
+
   // Get current control state
   ControlState getControlState() const;
-  
+
+  // Serial actuator communication (Serial1)
+  // Format: <CHR>FLOAT\n (e.g., "V50.5\n")
+  // Note: Caller is responsible for value validation/limiting
+  bool sendSerialCommand(char command, float value);
+  bool readSerialResponse(char& command, float& value, uint32_t timeout_ms = 100);
+  bool readSerialMeasurement(char& command, float& value, uint32_t timeout_ms = 100);
+  void clearSerialBuffer();
+
   // Main execution method - call this from the main loop
   void execute(float flow_reference, float flow_measured, int quiet_mode);
   
@@ -87,11 +95,16 @@ private:
   // Output methods
   void outputToValve(uint16_t signal);
   void analogOutMCP4725(uint16_t dac_output);
-  
+
   // Signal generators
   uint16_t generateSine();
   uint16_t generateStep();
   uint16_t generateTriangle();
+
+  // Conversion helpers - hardware abstraction
+  // These methods encapsulate knowledge about hardware resolution (12-bit = 0-4095)
+  uint16_t percentToHardware(float percent) const;
+  float hardwareToPercent(uint16_t hardware) const;
 };
 
 #endif

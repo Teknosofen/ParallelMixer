@@ -45,11 +45,8 @@ public:
         int y = 0;
     };
 
-    DisplayPos logoPos;
     DisplayPos labelPos;
     DisplayPos versionPos;
-    DisplayPos servoIDPos;
-    DisplayPos timePos;
     DisplayPos wiFiRectPos;
     DisplayPos wiFiLabelPos;
     DisplayPos wiFiAPIPPos;
@@ -57,9 +54,6 @@ public:
     DisplayPos wiFiPromptPos;
     DisplayPos statusRectPos;
     DisplayPos statusLabelPos;
-    DisplayPos statusCOMPos;
-    DisplayPos statusSDPos;
-    DisplayPos phasePos;
     DisplayPos statusControllerModePos;
     DisplayPos statusFlowPos;
     DisplayPos statusPressurePos;

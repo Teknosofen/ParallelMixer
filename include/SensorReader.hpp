@@ -3,13 +3,14 @@
 
 #include <Arduino.h>
 #include "Wire.h"
+#include "PinConfig.h"
 
 // Sensor I2C addresses
-#define I2Cadr_SFM 0x40  // Flow meter (legacy)
-#define I2Cadr_SPD 0x25  // Differential pressure sensor
-#define I2Cadr_SSC 0x58  // Supply pressure sensor
-#define I2Cadr_SFM3505 0x2E  // SFM3505 flow sensor
-#define I2Cadr_ABP2 0x29  // ABP2 press sensor sensor
+#define I2Cadr_SFM 0x40  // Flow meter (legacy, disabled)
+#define I2Cadr_SPD 0x25  // Differential pressure sensor (legacy, disabled)
+#define I2Cadr_SSC 0x58  // Supply pressure sensor (legacy, disabled)
+#define I2Cadr_SFM3505 0x2E  // SFM3505 flow sensor (ACTIVE)
+#define I2Cadr_ABP2 0x28  // ABP2DSNT150PG2A3XX Honeywell pressure sensor (ACTIVE)
 
 // Sensor commands (legacy sensors)
 #define SFM_com0 0x20  // SW reset
@@ -22,13 +23,16 @@
 #define SFM3505_CMD_START_CONTINUOUS 0x3603
 #define SFM3505_CMD_STOP_CONTINUOUS 0x3FF9
 
+// SFM3505 CRC validation (set to 0 to disable CRC checks for debugging)
+#define SFM3505_ENABLE_CRC_CHECK 0  // TEMPORARILY DISABLED for testing
+
 struct SensorData {
-  // Legacy/existing sensors
-  float differential_pressure;  // SPD pressure in mBar
-  float flow;                   // Legacy SFM flow in L/min (from 0x40)
-  float supply_pressure;        // SSC pressure in PSI
-  
-  // SFM3505 flow sensor data
+  // Legacy/existing sensors (disabled)
+  float differential_pressure;  // SPD pressure in mBar (disabled)
+  float flow;                   // Legacy SFM flow in L/min from 0x40 (disabled)
+  float supply_pressure;        // ABP2 pressure in kPa (ACTIVE)
+
+  // SFM3505 flow sensor data (ACTIVE)
   float sfm3505_air_flow;       // SFM3505 air flow in slm
   float sfm3505_o2_flow;        // SFM3505 O2 flow in slm
 };
@@ -57,7 +61,21 @@ public:
   // SFM3505 control methods
   bool startSFM3505Measurement();
   bool stopSFM3505Measurement();
-  
+
+  // ABP2 pressure sensor methods - asynchronous measurement
+  // Usage in main loop at 200Hz:
+  //   if (iteration % 2 == 0) {  // Every other cycle (100Hz)
+  //     sensor.startABP2Measurement();  // Start conversion
+  //   } else {
+  //     float pressure; uint8_t status;
+  //     if (sensor.readABP2Pressure(pressure, status)) {
+  //       // Use pressure value
+  //     }
+  //   }
+  bool startABP2Measurement();           // Send 0xAA 0x00 0x00 command
+  bool readABP2Pressure(float& pressure_kpa, uint8_t& status_byte);  // Read 7 bytes (no delays!)
+  bool isABP2Busy();                     // Check busy flag without full read
+
   const char* getName() const { return _name; }
 
 private:

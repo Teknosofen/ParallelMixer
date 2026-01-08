@@ -81,32 +81,25 @@ void CommandParser::printHelp() {
   Serial.println("C for controller mode");
   Serial.println("  0 = PI controller, 1 = Valve set value");
   Serial.println("  2 = Sine, 3 = step, 4 = Triangle");
-  Serial.println("O for Offset in [DAC steps], Int");
-  Serial.println("A for Amplitude in [DAC steps], int");
+  Serial.println("O for Offset in [%], float 0.0-100.0");
+  Serial.println("A for Amplitude in [%], float 0.0-100.0");
   Serial.println("S for Samples per period of pulses or sine, int");
-  Serial.println("V for manual setting of valve output [12 bit DAC counts 0..4095]");
+  Serial.println("V for manual setting of valve output [%], float 0.0-100.0");
   Serial.println("R for rise time could be added another day");
   Serial.println("! lists current settings");
 }
 
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,
-                                  int offset, int amplitude, int samples_per_period,
-                                  uint16_t valve_signal) {
-  Serial.print("T= ");
-  Serial.println(config.delta_t);
-  Serial.print("Q= ");
-  Serial.println(config.quiet_mode);
-  Serial.print("C= ");
-  Serial.println(controller_mode);
-  Serial.print("O= ");
-  Serial.println(offset);
-  Serial.print("A= ");
-  Serial.println(amplitude);
-  Serial.print("S= ");
-  Serial.println(samples_per_period);
-  Serial.print("V= ");
-  Serial.println(valve_signal);
-  Serial.println("");
+                                  float offset, float amplitude, int samples_per_period,
+                                  float valve_signal) {
+  Serial.printf("T= %lu\n", config.delta_t);
+  Serial.printf("Q= %d\n", config.quiet_mode);
+  Serial.printf("C= %d\n", controller_mode);
+  Serial.printf("O= %.2f %%\n", offset);
+  Serial.printf("A= %.2f %%\n", amplitude);
+  Serial.printf("S= %d\n", samples_per_period);
+  Serial.printf("V= %.2f %%\n", valve_signal);
+  Serial.println();
 }
 
 // Global serialEvent function required by Arduino framework
@@ -265,56 +258,68 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
       }
       break;
       
-    case 'O': case 'o':  // Offset
+    case 'O': case 'o':  // Offset (as percentage 0-100%)
       {
         SignalGeneratorConfig sigConfig = actuator.getSignalGeneratorConfig();
         if (params.length() > 0) {
-          int offset = params.toInt();
-          if (offset < 0) offset = 0;
-          if (offset > 4095) offset = 4095;
-          sigConfig.offset = offset;
+          float offset_percent = params.toFloat();
+          // Clamp to 0-100%
+          if (offset_percent < 0.0) offset_percent = 0.0;
+          if (offset_percent > 100.0) offset_percent = 100.0;
+          // Store as percentage - ActuatorControl handles hardware conversion
+          sigConfig.offset = offset_percent;
           actuator.setSignalGeneratorConfig(sigConfig);
           Serial.print("O= ");
-          Serial.print(sigConfig.offset);
+          Serial.print(offset_percent, 2);
+          Serial.print(" %");
           sendOK();
         } else {
           Serial.print("O= ");
-          Serial.println(sigConfig.offset);
+          Serial.print(sigConfig.offset, 2);  // Already in percentage
+          Serial.println(" %");
         }
       }
       break;
       
-    case 'A': case 'a':  // Amplitude
+    case 'A': case 'a':  // Amplitude (as percentage 0-100%)
       {
         SignalGeneratorConfig sigConfig = actuator.getSignalGeneratorConfig();
         if (params.length() > 0) {
-          int amplitude = params.toInt();
-          if (amplitude < 0) amplitude = 0;
-          if (amplitude > 4095) amplitude = 4095;
-          sigConfig.amplitude = amplitude;
+          float amplitude_percent = params.toFloat();
+          // Clamp to 0-100%
+          if (amplitude_percent < 0.0) amplitude_percent = 0.0;
+          if (amplitude_percent > 100.0) amplitude_percent = 100.0;
+          // Store as percentage - ActuatorControl handles hardware conversion
+          sigConfig.amplitude = amplitude_percent;
           actuator.setSignalGeneratorConfig(sigConfig);
           Serial.print("A= ");
-          Serial.print(sigConfig.amplitude);
+          Serial.print(amplitude_percent, 2);
+          Serial.print(" %");
           sendOK();
         } else {
           Serial.print("A= ");
-          Serial.println(sigConfig.amplitude);
+          Serial.print(sigConfig.amplitude, 2);  // Already in percentage
+          Serial.println(" %");
         }
       }
       break;
       
-    case 'V': case 'v':  // Valve control signal
+    case 'V': case 'v':  // Valve control signal (as percentage 0-100%)
       if (params.length() > 0) {
-        int signal = params.toInt();
-        if (signal < 0) signal = 0;
-        if (signal > 4095) signal = 4095;
-        actuator.setValveControlSignal(signal);
+        float valve_percent = params.toFloat();
+        // Clamp to 0-100%
+        if (valve_percent < 0.0) valve_percent = 0.0;
+        if (valve_percent > 100.0) valve_percent = 100.0;
+        // Pass percentage directly - ActuatorControl handles hardware conversion
+        actuator.setValveControlSignal(valve_percent);
         Serial.print("V= ");
-        Serial.print(signal);
+        Serial.print(valve_percent, 2);
+        Serial.print(" %");
         sendOK();
       } else {
         Serial.print("V= ");
-        Serial.println(actuator.getValveControlSignal());
+        Serial.print(actuator.getValveControlSignal(), 2);  // Returns percentage
+        Serial.println(" %");
       }
       break;
       
