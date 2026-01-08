@@ -179,7 +179,7 @@ void setup() {
 
   // Show boot screen with version info for 2 seconds
   renderer.showBootScreen(parallelVerLbl, __DATE__, __TIME__);
-  delay(3000);
+  delay(2000);
 
   Serial.println("Boot screen displayed");
 
@@ -211,15 +211,17 @@ void setup() {
                  I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_PULLUP_CTRL_PIN);
   delay(10);  // Additional settling time after pull-up enable
 
+  renderer.showLinesOnScreen("SCANNING", "I2C-bus","");
+  
   // Quick scan of expected I2C addresses only
   hostCom.println("Scanning I2C bus - checking expected addresses...");
   int deviceCount = 0;
 
   // List of expected sensor addresses
-  byte expectedAddresses[] = {0x2E, 0x25, 0x40, 0x58, 0x76};
-  const char* deviceNames[] = {"SFM3505", "SPD sensor", "Legacy SFM", "SSC sensor", "BME280"};
+  byte expectedAddresses[] = {0x2E, 0x25, 0x40, 0x58, 0x76, 0x28};
+  const char* deviceNames[] = {"SFM3505", "SPD sensor", "Legacy SFM", "SSC sensor", "BME280", "ABP2"};
 
-  for (int i = 0; i < 5; i++) {
+  for (int i = 0; i < 6; i++) {
     byte address = expectedAddresses[i];
     Wire.beginTransmission(address);
     byte error = Wire.endTransmission();
@@ -245,6 +247,7 @@ void setup() {
   } else {
     hostCom.printf("\n  ✅ Found %d device(s) on I2C bus\n", deviceCount);
   }
+delay(1000);
 
   // I2C Bus 1 (Wire1) - GPIO10/11 - DISABLED FOR NOW
   // Wire1.begin(I2C1_SDA_PIN, I2C1_SCL_PIN, 100000);

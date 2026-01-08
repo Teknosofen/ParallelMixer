@@ -39,6 +39,30 @@ void ImageRenderer::showBootScreen(const char* version, const char* compileDate,
     tft.setTextSize(defaultTextSize);
 }
 
+void ImageRenderer::showLinesOnScreen(const char* line1, const char* line2, const char* line3) {
+    tft.fillScreen(TFT_LOGOBACKGROUND);
+    tft.setTextColor(TFT_WHITE, TFT_LOGOBACKGROUND);
+    tft.setTextSize(1);
+
+    // Center the boot screen content
+    int centerY = tft.height() / 2;
+
+    // Draw title
+    tft.setFreeFont(&FreeSansBold12pt7b);
+    drawCenteredText("Info:", centerY - 60);
+
+    // Draw Line1
+    tft.setFreeFont(&FreeSans9pt7b);
+    drawCenteredText(String(line1), centerY - 20);
+    // Draw Line2
+    drawCenteredText(String(line2), centerY + 10);
+    // Draw Line3
+    drawCenteredText(String(line3), centerY + 40);
+    // Reset to default font
+    tft.setTextSize(defaultTextSize);
+}
+
+
 void ImageRenderer::clear() {
     tft.fillScreen(TFT_LOGOBACKGROUND); // Clear the display with the background color
     tft.setTextColor(TFT_WHITE, TFT_LOGOBACKGROUND); // Reset text color and background

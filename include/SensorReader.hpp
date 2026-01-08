@@ -9,6 +9,7 @@
 #define I2Cadr_SPD 0x25  // Differential pressure sensor
 #define I2Cadr_SSC 0x58  // Supply pressure sensor
 #define I2Cadr_SFM3505 0x2E  // SFM3505 flow sensor
+#define I2Cadr_ABP2 0x29  // ABP2 press sensor sensor
 
 // Sensor commands (legacy sensors)
 #define SFM_com0 0x20  // SW reset
