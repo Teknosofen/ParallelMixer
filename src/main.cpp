@@ -131,8 +131,9 @@ void setup() {
 
   // Initialize USB Serial - use default USB CDC
   Serial.begin();  // For ESP32-S3 USB CDC, no baud rate needed
-  delay(2500);  // Give more time for Serial to initialize
 
+  delay(2000);  // Give more time for Serial to initialize
+  
   // Enable display power
   pinMode(DISPLAY_POWER_PIN, OUTPUT);
   digitalWrite(DISPLAY_POWER_PIN, HIGH);
@@ -144,8 +145,8 @@ void setup() {
   delay(2000);
 
   // Initialize system configuration
-  sysConfig.delta_t = 10000;          // Main loop: 10ms = 100Hz
-  sysConfig.PressSamplTime = 10000;    // Pressure: 10ms = 100Hz
+  sysConfig.delta_t = 100000;          // Main loop: 100ms = 10Hz
+  sysConfig.PressSamplTime = 100000;    // Pressure: 100ms = 10Hz
   sysConfig.quiet_mode = 0;            // Verbose output
   sysConfig.digital_flow_reference = 0.0;
 
@@ -153,7 +154,7 @@ void setup() {
   parser.begin(250000);
 
   // Print startup banner
-  hostCom.println("\n╔═════════════════════════════════╗");
+  hostCom.println("\n╔═══════════════════════════════════╗");
   hostCom.printf( "║  %s   ║\n", parallelVerLbl);
   hostCom.printf( "║  Build: %s %s      ║\n", __DATE__, __TIME__);
   hostCom.println("╚═══════════════════════════════════╝\n");
@@ -342,22 +343,24 @@ void loop() {
   //   hostCom.printf("[Serial2 RX]: %s\n", data.c_str());
   // }
 
-  // Send data to external microcontroller via Serial1 (including SFM3505 data)
+  // Send data to external microcontroller via Serial1
   static uint32_t lastSerialSend = 0;
   if (millis() - lastSerialSend > 1000) {  // Send every 1 second
     lastSerialSend = millis();
-
-    // Send to Serial1 - include SFM3505 Air flow
-    Serial1.printf("Flow:%0.2f,Press:%0.2f,Air:%0.3f\n",
-                   sensorData_bus0.flow,
-                   sensorData_bus0.supply_pressure,
-                   sensorData_bus0.sfm3505_air_flow);
+    char actuatorCMD ='V';
+    float localValveCtrl = actuator.getValveControlSignal();
+    actuator.sendSerialCommand(actuatorCMD, localValveCtrl);
+    float actuatorFlow = 0.0;
+    char actuatorData = '0';
+    bool error = actuator.readSerialMeasurement(actuatorData, actuatorFlow, 50);
+    hostCom.printf("[Serial1] '%C' %.2f CMD sent. %C received: %.2f\n", actuatorCMD, localValveCtrl, actuatorData, actuatorFlow);
+    
   }
 
   // ============================================================================
   // Command parser and UI updates
   // ============================================================================
-  
+
   parser.update();
   parser.processCommands(sysConfig, actuator);
 
@@ -406,7 +409,7 @@ void loop() {
     if (interactionKey1.wasLongPress()) {
       hostCom.println("Key1 long press (>1s)");
       wifiServer.start();
-      renderer.drawWiFiAPIP("WiFi ON       ", wifiServer.getApIpAddress());
+      renderer.drawWiFiAPIP(wifiServer.getApIpAddress(), PMIXERSSID);
       renderer.drawWiFiPromt("Press key to disable");
     } else {
       hostCom.println("interactionKey1 short press");

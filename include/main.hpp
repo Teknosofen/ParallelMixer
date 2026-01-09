@@ -24,7 +24,7 @@
 
 #define hostCom Serial // Use Serial for host communication
 
-#define SET_UI_UPDATE_TIME 250000 // 100ms in [us] for UI update time
+#define SET_UI_UPDATE_TIME 100000 // 100ms in [us] for UI update time
 #define PMIXERSSID "ParallelMixer" // WiFi SSID for the Parallel Mixer
 #define PMIXERPWD "" // WiFi Password for the Parallel Mixer
 
