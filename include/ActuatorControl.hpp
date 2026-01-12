@@ -4,6 +4,9 @@
 #include <Arduino.h>
 #include "Wire.h"
 
+// Forward declaration
+class SerialActuatorReader;
+
 #define I2Cadr_MCP4725 0x60
 
 enum ControllerMode {
@@ -66,9 +69,10 @@ public:
   // Get current control state
   ControlState getControlState() const;
 
-  // Serial actuator communication (Serial1)
-  // Format: <CHR>FLOAT\n (e.g., "V50.5\n")
-  // Note: Caller is responsible for value validation/limiting
+  // Serial actuator communication (Serial1) - forwarded to SerialActuatorReader
+  // These methods are kept for backward compatibility
+  // Note: Set the serial reader pointer before using these methods
+  void setSerialActuatorReader(SerialActuatorReader* reader);
   bool sendSerialCommand(char command, float value);
   bool readSerialResponse(char& command, float& value, uint32_t timeout_ms = 100);
   bool readSerialMeasurement(char& command, float& value, uint32_t timeout_ms = 100);
@@ -81,17 +85,20 @@ private:
   uint8_t _valve_ctrl_pin;
   ControllerMode _controller_mode;
   bool _external_pwm;
-  
+
   // PID state
   PIDConfig _pid_config;
   ControlState _control_state;
-  
+
   // Signal generator state
   SignalGeneratorConfig _sig_gen_config;
   uint16_t _index_in_period;
   uint16_t _valve_signal_externally_set;
   uint16_t _valve_signal_generated;
-  
+
+  // Serial actuator reader pointer (for forwarding serial calls)
+  SerialActuatorReader* _serialActuatorReader;
+
   // Output methods
   void outputToValve(uint16_t signal);
   void analogOutMCP4725(uint16_t dac_output);

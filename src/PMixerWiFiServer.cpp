@@ -5,12 +5,13 @@ WebServer server(80);
 PMixerWiFiServer::PMixerWiFiServer(String ssid, String password)
     : _ssid(ssid), _password(password), _running(false), _maxDataPoints(100),
       _currentFlow(0.0f), _currentPressure(0.0f), _currentValveSignal(0.0f),
-      _currentMode("Initializing")
+      _currentCurrent(0.0f), _currentMode("Initializing")
 {
     _timestamps.reserve(_maxDataPoints);
     _flowHistory.reserve(_maxDataPoints);
     _pressureHistory.reserve(_maxDataPoints);
     _valveSignalHistory.reserve(_maxDataPoints);
+    _currentHistory.reserve(_maxDataPoints);
 }
 
 void PMixerWiFiServer::start() {
@@ -59,19 +60,24 @@ void PMixerWiFiServer::updatePressure(float pressure) {
 void PMixerWiFiServer::updateValveSignal(float signal) {
     _currentValveSignal = signal;
     // Add data point when valve signal updates (or choose your trigger)
-    addDataPoint(_currentFlow, _currentPressure, _currentValveSignal);
+    addDataPoint(_currentFlow, _currentPressure, _currentValveSignal, _currentCurrent);
+}
+
+void PMixerWiFiServer::updateCurrent(float current) {
+    _currentCurrent = current;
 }
 
 void PMixerWiFiServer::updateMode(const String& mode) {
     _currentMode = mode;
 }
 
-void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal) {
+void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, float current) {
     _timestamps.push_back(millis());
     _flowHistory.push_back(flow);
     _pressureHistory.push_back(pressure);
     _valveSignalHistory.push_back(signal);
-    
+    _currentHistory.push_back(current);
+
     trimDataHistory();
 }
 
@@ -81,6 +87,7 @@ void PMixerWiFiServer::trimDataHistory() {
         _flowHistory.erase(_flowHistory.begin());
         _pressureHistory.erase(_pressureHistory.begin());
         _valveSignalHistory.erase(_valveSignalHistory.begin());
+        _currentHistory.erase(_currentHistory.begin());
     }
 }
 
@@ -107,6 +114,7 @@ String PMixerWiFiServer::generateDataJson() {
     json += "\"flow\":" + String(_currentFlow, 2) + ",";
     json += "\"pressure\":" + String(_currentPressure, 2) + ",";
     json += "\"valve\":" + String(_currentValveSignal, 2) + ",";
+    json += "\"current\":" + String(_currentCurrent, 3) + ",";
     json += "\"mode\":\"" + _currentMode + "\",";
     json += "\"timestamp\":" + String(millis());
     json += "}";
@@ -134,6 +142,11 @@ String PMixerWiFiServer::generateHistoryJson() {
     for (size_t i = 0; i < _valveSignalHistory.size(); i++) {
         if (i > 0) json += ",";
         json += String(_valveSignalHistory[i], 2);
+    }
+    json += "],\"current\":[";
+    for (size_t i = 0; i < _currentHistory.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_currentHistory[i], 3);
     }
     json += "]}";
     return json;
@@ -258,6 +271,10 @@ String PMixerWiFiServer::generateHtmlPage() {
                 <div class="status-label">Valve Control Signal</div>
                 <div class="status-value" id="valveValue">--</div>
             </div>
+            <div class="status-card">
+                <div class="status-label">Current</div>
+                <div class="status-value" id="currentValue">--</div>
+            </div>
         </div>
         
         <div class="chart-container">
@@ -276,7 +293,8 @@ String PMixerWiFiServer::generateHtmlPage() {
             timestamps: [],
             flow: [],
             pressure: [],
-            valve: []
+            valve: [],
+            current: []
         };
 
         // Chart setup
@@ -305,6 +323,13 @@ String PMixerWiFiServer::generateHtmlPage() {
                         data: [],
                         borderColor: '#4ECDC4',
                         backgroundColor: 'rgba(78, 205, 196, 0.1)',
+                        tension: 0.3
+                    },
+                    {
+                        label: 'Current',
+                        data: [],
+                        borderColor: '#FFA500',
+                        backgroundColor: 'rgba(255, 165, 0, 0.1)',
                         tension: 0.3
                     }
                 ]
@@ -354,20 +379,23 @@ String PMixerWiFiServer::generateHtmlPage() {
                 document.getElementById('flowValue').textContent = data.flow.toFixed(2);
                 document.getElementById('pressureValue').textContent = data.pressure.toFixed(2);
                 document.getElementById('valveValue').textContent = data.valve.toFixed(2);
+                document.getElementById('currentValue').textContent = data.current.toFixed(3) + ' A';
                 document.getElementById('modeDisplay').textContent = 'Mode: ' + data.mode;
-                
+
                 // Store data
                 const timeInSeconds = (data.timestamp / 1000).toFixed(1);
                 dataHistory.timestamps.push(data.timestamp);
                 dataHistory.flow.push(data.flow);
                 dataHistory.pressure.push(data.pressure);
                 dataHistory.valve.push(data.valve);
-                
+                dataHistory.current.push(data.current);
+
                 // Update chart
                 chart.data.labels.push(timeInSeconds);
                 chart.data.datasets[0].data.push(data.flow);
                 chart.data.datasets[1].data.push(data.pressure);
                 chart.data.datasets[2].data.push(data.valve);
+                chart.data.datasets[3].data.push(data.current);
                 
                 // Keep only configured number of points on graph
                 const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
@@ -392,7 +420,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                 dataHistory.flow = history.flow;
                 dataHistory.pressure = history.pressure;
                 dataHistory.valve = history.valve;
-                
+                dataHistory.current = history.current;
+
                 // Populate chart with configured number of points
                 const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
                 const startIdx = Math.max(0, history.timestamps.length - maxPoints);
@@ -402,6 +431,7 @@ String PMixerWiFiServer::generateHtmlPage() {
                     chart.data.datasets[0].data.push(history.flow[i]);
                     chart.data.datasets[1].data.push(history.pressure[i]);
                     chart.data.datasets[2].data.push(history.valve[i]);
+                    chart.data.datasets[3].data.push(history.current[i]);
                 }
                 chart.update();
             } catch (error) {
@@ -416,13 +446,14 @@ String PMixerWiFiServer::generateHtmlPage() {
                 return;
             }
 
-            let csv = 'Timestamp (ms)\tFlow\tPressure\tValve Signal\n';
-            
+            let csv = 'Timestamp (ms)\tFlow\tPressure\tValve Signal\tCurrent (A)\n';
+
             for (let i = 0; i < dataHistory.timestamps.length; i++) {
                 csv += dataHistory.timestamps[i] + '\t';
                 csv += dataHistory.flow[i].toFixed(2) + '\t';
                 csv += dataHistory.pressure[i].toFixed(2) + '\t';
-                csv += dataHistory.valve[i].toFixed(2) + '\n';
+                csv += dataHistory.valve[i].toFixed(2) + '\t';
+                csv += dataHistory.current[i].toFixed(3) + '\n';
             }
 
             // Create download

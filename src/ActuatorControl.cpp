@@ -1,4 +1,5 @@
 #include "ActuatorControl.hpp"
+#include "SerialActuatorReader.hpp"
 #include "math.h"
 
 ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
@@ -7,19 +8,20 @@ ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
     _external_pwm(true),
     _index_in_period(0),
     _valve_signal_externally_set(0),
-    _valve_signal_generated(0) {
-  
+    _valve_signal_generated(0),
+    _serialActuatorReader(nullptr) {
+
   // Default PID configuration
   _pid_config.p_gain = 1.0;
   _pid_config.i_gain = 1.0;
   _pid_config.d_gain = 0.0;
   _pid_config.valve_offset = 0.0;
-  
+
   // Default signal generator configuration (percentage-based)
   _sig_gen_config.offset = 25.0;      // 25% (was 1024/4095)
-  _sig_gen_config.amplitude = 6.25;   // 6.25% (was 256/4095)
+  _sig_gen_config.amplitude = 10.0;   // 10.0%
   _sig_gen_config.samples_per_period = 256;
-  
+
   // Reset control state
   resetPIDState();
 }
@@ -264,8 +266,8 @@ uint16_t ActuatorControl::percentToHardware(float percent) const {
   if (percent < 0.0) percent = 0.0;
   if (percent > 100.0) percent = 100.0;
 
-  // Convert percentage to 12-bit hardware value (0-4095)
-  return (uint16_t)((percent * 4095.0) / 100.0);
+  // Convert percentage to 12-bit hardware value (0-4095) with rounding
+  return (uint16_t)((percent * 4095.0 / 100.0) + 0.5);
 }
 
 float ActuatorControl::hardwareToPercent(uint16_t hardware) const {
@@ -274,82 +276,40 @@ float ActuatorControl::hardwareToPercent(uint16_t hardware) const {
 }
 
 // ============================================================================
-// Serial Actuator Communication (Serial1)
+// Serial Actuator Communication - Forwarded to SerialActuatorReader
 // ============================================================================
-// Protocol: <CHR>FLOAT\n
-// Example: "V50.5\n" - Set valve to 50.5%
-// Example: "P123.4\n" - Pressure reading 123.4 kPa
+// These methods forward calls to the SerialActuatorReader instance
+// Kept for backward compatibility with existing code
 // ============================================================================
+
+void ActuatorControl::setSerialActuatorReader(SerialActuatorReader* reader) {
+  _serialActuatorReader = reader;
+}
 
 bool ActuatorControl::sendSerialCommand(char command, float value) {
-  // Send command: <CHR>FLOAT\n
-  // Note: Caller is responsible for value validation/limiting
-  String cmd = String(command) + String(value, 2) + "\n";
-  Serial1.print(cmd);
-
-  // Optional: Add debug output
-  #ifdef DEBUG_SERIAL_ACTUATOR
-  Serial.printf("[ActuatorControl] Sent to Serial1: %s", cmd.c_str());
-  #endif
-
-  return true;
+  if (_serialActuatorReader == nullptr) {
+    return false;  // No serial reader configured
+  }
+  return _serialActuatorReader->sendSerialCommand(command, value);
 }
 
 bool ActuatorControl::readSerialResponse(char& command, float& value, uint32_t timeout_ms) {
-  // Read response from Serial1 with timeout
-  // Expected format: <CHR>FLOAT\n
-
-  uint32_t start_time = millis();
-  String response = "";
-
-  while (millis() - start_time < timeout_ms) {
-    if (Serial1.available()) {
-      char c = Serial1.read();
-
-      if (c == '\n') {
-        // End of message, parse it
-        if (response.length() >= 2) {
-          command = response[0];
-          value = response.substring(1).toFloat();
-
-          #ifdef DEBUG_SERIAL_ACTUATOR
-          Serial.printf("[ActuatorControl] Received from Serial1: %c%.2f\n", command, value);
-          #endif
-
-          return true;
-        }
-        return false;  // Malformed message
-      } else {
-        response += c;
-
-        // Prevent buffer overflow
-        if (response.length() > 32) {
-          return false;
-        }
-      }
-    }
-
-    // Small delay to prevent tight polling
-    delayMicroseconds(100);
+  if (_serialActuatorReader == nullptr) {
+    return false;  // No serial reader configured
   }
-
-  // Timeout occurred
-  #ifdef DEBUG_SERIAL_ACTUATOR
-  Serial.println("[ActuatorControl] Serial1 read timeout");
-  #endif
-
-  return false;
+  return _serialActuatorReader->readSerialResponse(command, value, timeout_ms);
 }
 
 bool ActuatorControl::readSerialMeasurement(char& command, float& value, uint32_t timeout_ms) {
-  // Alias for readSerialResponse - same protocol for measurements
-  // Kept as separate method for semantic clarity
-  return readSerialResponse(command, value, timeout_ms);
+  if (_serialActuatorReader == nullptr) {
+    return false;  // No serial reader configured
+  }
+  return _serialActuatorReader->readSerialMeasurement(command, value, timeout_ms);
 }
 
 void ActuatorControl::clearSerialBuffer() {
-  // Clear any pending data in Serial1 buffer
-  while (Serial1.available()) {
-    Serial1.read();
+  if (_serialActuatorReader == nullptr) {
+    return;  // No serial reader configured
   }
+  _serialActuatorReader->clearBuffer();
 }

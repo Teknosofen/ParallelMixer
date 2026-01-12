@@ -26,6 +26,7 @@ public:
     void updateFlow(float flow);
     void updatePressure(float pressure);
     void updateValveSignal(float signal);
+    void updateCurrent(float current);
     void updateMode(const String& mode);
     
     // Configuration
@@ -41,6 +42,7 @@ private:
     float _currentFlow;
     float _currentPressure;
     float _currentValveSignal;
+    float _currentCurrent;
     String _currentMode;
     
     // Data history for graphing
@@ -48,6 +50,7 @@ private:
     std::vector<float> _flowHistory;
     std::vector<float> _pressureHistory;
     std::vector<float> _valveSignalHistory;
+    std::vector<float> _currentHistory;
     
     // Server setup
     void setupWebServer();
@@ -61,7 +64,7 @@ private:
     String generateHistoryJson();
     
     // Data management
-    void addDataPoint(float flow, float pressure, float signal);
+    void addDataPoint(float flow, float pressure, float signal, float current);
     void trimDataHistory();
 };
 

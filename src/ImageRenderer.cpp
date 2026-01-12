@@ -143,11 +143,11 @@ void ImageRenderer::drawWiFiField() {
 }
 
 void ImageRenderer::drawStatusField() {
-    tft.setFreeFont(FSS9);   
+    tft.setFreeFont(FSS9);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 120, 10, TFT_WHITE); // White border around the screen
-    tft.drawString("Status  ", statusLabelPos.x, statusLabelPos.y); // Print a message on the display  
+    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 120, 10, TFT_WHITE); // White border (increased height for current)
+    tft.drawString("Status  ", statusLabelPos.x, statusLabelPos.y); // Print a message on the display
 }
 
 void ImageRenderer::drawWiFiAPIP(String WiFiAPIP, String wiFiSSID) {
@@ -208,13 +208,26 @@ void ImageRenderer::drawValveCtrlSignal(const String& signal) {
     static String oldSignal = "0";
     // Clear previous text by drawing background rectangle
     tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
-    tft.setFreeFont(FSS9);  
+    tft.setFreeFont(FSS9);
     tft.drawString("Valve: " + oldSignal, statusValveCtrlSignalPos.x, statusValveCtrlSignalPos.y, 2);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
     // Draw the valve control signal string
     tft.drawString("Valve: " + signal, statusValveCtrlSignalPos.x, statusValveCtrlSignalPos.y, 2);
     oldSignal = signal;
+}
+
+void ImageRenderer::drawCurrent(const String& current) {
+    static String oldCurrent = "0.0";
+    // Clear previous text by drawing background rectangle
+    tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+    tft.setFreeFont(FSS9);
+    tft.drawString("Current: " + oldCurrent, statusCurrentPos.x, statusCurrentPos.y, 2);
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    tft.setTextSize(1);
+    // Draw the current string
+    tft.drawString("Current: " + current, statusCurrentPos.x, statusCurrentPos.y, 2);
+    oldCurrent = current;
 }
 
 void ImageRenderer::initPositions() {
@@ -256,4 +269,7 @@ void ImageRenderer::initPositions() {
 
     statusControllerModePos.x = statusLabelPos.x;
     statusControllerModePos.y = statusLabelPos.y + 80;
+
+    statusCurrentPos.x = statusLabelPos.x;
+    statusCurrentPos.y = statusLabelPos.y + 100;
 }

@@ -13,6 +13,7 @@
 #include "Button.hpp"
 #define PMIXER_GRAPH_DISPLAY_POINTS 512
 #include "PMixerWiFiServer.hpp"
+#include "SerialActuatorReader.hpp"
 
 // ---------------------------------
 // logo BMP file as well as factory default config files are stored in SPIFFS
@@ -42,6 +43,7 @@ SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505
 
 ActuatorControl actuator(Valve_ctrl_Analogue_pin);
 CommandParser parser;
+SerialActuatorReader actuatorReader(&Serial1);
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
 PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
@@ -209,6 +211,9 @@ void setup() {
   Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
   hostCom.printf("Serial1: TX=GPIO%d, RX=GPIO%d @ 115200 baud\n\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
 
+  // Initialize asynchronous serial reader for actuator data
+  actuatorReader.begin();
+
   // ============================================================================
   // Initialize sensors
   // ============================================================================
@@ -224,6 +229,9 @@ void setup() {
   // ============================================================================
   wifiServer.start();
   actuator.initialize();
+
+  // Link actuator to serial reader for communication
+  actuator.setSerialActuatorReader(&actuatorReader);
 
   past_time = micros();
 
@@ -324,18 +332,15 @@ void loop() {
     wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);  // Send SFM3505 Air flow to web
     wifiServer.updatePressure(sensorData_bus0.supply_pressure);  // Uses async ABP2 reading
     wifiServer.updateValveSignal(actuator.getValveControlSignal());
+    wifiServer.updateCurrent(actuatorReader.getValveActuatorCurrent());  // Send actuator current to web
   }
   
   // ============================================================================
-  // Handle Serial1 communication with external microcontroller
+  // Handle Serial1 communication with external microcontroller (Asynchronous)
   // ============================================================================
 
-  // Check for data from Serial1
-  if (Serial1.available()) {
-    String data = Serial1.readStringUntil('\n');
-    hostCom.printf("[Serial1 RX]: %s\n", data.c_str());
-    // Process data from external MCU
-  }
+  // Update asynchronous serial reader - processes incoming data non-blocking
+  actuatorReader.update();
 
   // Serial2 - DISABLED FOR NOW
   // if (Serial2.available()) {
@@ -347,14 +352,27 @@ void loop() {
   static uint32_t lastSerialSend = 0;
   if (millis() - lastSerialSend > 1000) {  // Send every 1 second
     lastSerialSend = millis();
-    char actuatorCMD ='V';
+
+    // Send valve command
+    char actuatorCMD = 'V';
     float localValveCtrl = actuator.getValveControlSignal();
     actuator.sendSerialCommand(actuatorCMD, localValveCtrl);
-    float actuatorFlow = 0.0;
-    char actuatorData = '0';
-    bool error = actuator.readSerialMeasurement(actuatorData, actuatorFlow, 50);
-    hostCom.printf("[Serial1] '%C' %.2f CMD sent. %C received: %.2f\n", actuatorCMD, localValveCtrl, actuatorData, actuatorFlow);
-    
+
+    // Access received data via helpers (non-blocking)
+    float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
+    float actuatorMisc = actuatorReader.getValveActuatorMisc();
+    char miscCmd = actuatorReader.getValveActuatorMiscCommand();
+
+    // Print misc data with proper handling of non-printable characters
+    if (miscCmd >= 32 && miscCmd <= 126) {
+      // Printable ASCII character
+      hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3fA, %c=%.2f\n",
+                     localValveCtrl, actuatorCurrent, miscCmd, actuatorMisc);
+    } else {
+      // Non-printable character - show hex value
+      hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3fA, [0x%02X]=%.2f (non-printable)\n",
+                     localValveCtrl, actuatorCurrent, (uint8_t)miscCmd, actuatorMisc);
+    }
   }
 
   // ============================================================================
@@ -399,6 +417,7 @@ void loop() {
     renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air
     renderer.drawPressure(String(sensorData_bus0.supply_pressure, 2) + " kPa");
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
+    renderer.drawCurrent(String(actuatorReader.getValveActuatorCurrent(), 3) + " A");
   }
 
   // ============================================================================
