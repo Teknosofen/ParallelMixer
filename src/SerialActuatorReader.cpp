@@ -56,6 +56,7 @@ float SerialActuatorReader::getValveActuatorMisc() const {
 }
 
 char SerialActuatorReader::getValveActuatorMiscCommand() const {
+  
   return _valveActuatorMiscCmd;
 }
 
@@ -107,6 +108,8 @@ void SerialActuatorReader::processMessage(const String& message) {
     _valveActuatorCurrent = value;
     _currentTimestamp = millis();
 
+//    Serial.printf("[SerialActuatorReader] Misc: %c%.2f timestamp: %lu\n", command, value, micros());
+
     #ifdef DEBUG_SERIAL_ACTUATOR_READER
     Serial.printf("[SerialActuatorReader] Current: %.3f A\n", value);
     #endif
@@ -117,7 +120,8 @@ void SerialActuatorReader::processMessage(const String& message) {
     _miscTimestamp = millis();
 
     #ifdef DEBUG_SERIAL_ACTUATOR_READER
-    Serial.printf("[SerialActuatorReader] Misc: %c%.2f\n", command, value);
+    Serial.printf("[SerialActuatorReader] Misc: %c%.2f timestamp: %lu\n", command, value, _miscTimestamp);
+
     #endif
   }
 }

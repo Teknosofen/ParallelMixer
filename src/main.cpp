@@ -364,16 +364,38 @@ void loop() {
     char miscCmd = actuatorReader.getValveActuatorMiscCommand();
 
     // Print misc data with proper handling of non-printable characters
-    if (miscCmd >= 32 && miscCmd <= 126) {
-      // Printable ASCII character
-      hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3fA, %c=%.2f\n",
-                     localValveCtrl, actuatorCurrent, miscCmd, actuatorMisc);
-    } else {
-      // Non-printable character - show hex value
-      hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3fA, [0x%02X]=%.2f (non-printable)\n",
-                     localValveCtrl, actuatorCurrent, (uint8_t)miscCmd, actuatorMisc);
+    if (!actuatorReader.isCurrentStale()) {
+      hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A],",
+                     localValveCtrl, actuatorCurrent);
+
+      if (!actuatorReader.isMiscStale()) {
+        if (miscCmd >= 32 && miscCmd <= 126) {
+          // Printable ASCII character
+          hostCom.printf(" %c=%.2f\n",
+                      miscCmd, actuatorMisc);
+        } else {
+          // Non-printable character - show hex value
+          hostCom.printf(" [0x%02X]=%.2f (non-printable)\n",
+                        (uint8_t)miscCmd, actuatorMisc);
+        }
+      }
+      hostCom.printf("\n");
     }
   }
+
+  //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], No misc data (stale)\n",
+  //                    localValveCtrl, actuatorCurrent);
+  //   } else
+  //   if (miscCmd >= 32 && miscCmd <= 126) {
+  //     // Printable ASCII character
+  //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], %c=%.2f\n",
+  //                    localValveCtrl, actuatorCurrent, miscCmd, actuatorMisc);
+  //   } else {
+  //     // Non-printable character - show hex value
+  //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], [0x%02X]=%.2f (non-printable)\n",
+  //                    localValveCtrl, actuatorCurrent, (uint8_t)miscCmd, actuatorMisc);
+  //   }
+  // }
 
   // ============================================================================
   // Command parser and UI updates

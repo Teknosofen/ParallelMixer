@@ -81,14 +81,14 @@ public:
    * @param max_age_ms Maximum age in milliseconds (default: 1000ms)
    * @return true if data is older than max_age_ms
    */
-  bool isCurrentStale(uint32_t max_age_ms = 1000) const;
+  bool isCurrentStale(uint32_t max_age_ms = 100) const;
 
   /**
    * @brief Check if misc data is stale
    * @param max_age_ms Maximum age in milliseconds (default: 1000ms)
    * @return true if data is older than max_age_ms
    */
-  bool isMiscStale(uint32_t max_age_ms = 1000) const;
+  bool isMiscStale(uint32_t max_age_ms = 100) const;
 
   /**
    * @brief Clear the receive buffer
@@ -143,7 +143,9 @@ private:
 
   // Stored data
   float _valveActuatorCurrent;     // Current in Amperes (command 'I')
+  bool _valveActuatorCurrentValid = false; // Flag indicating if current data is valid
   float _valveActuatorMisc;        // Misc data (any other command)
+  bool _valveActuatorMiscValid    = false;   // Flag indicating if misc data is valid
   char _valveActuatorMiscCmd;      // Command char for misc data
 
   // Timestamps
