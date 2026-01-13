@@ -64,40 +64,39 @@ void CommandParser::sendError() {
 
 void CommandParser::printHelp() {
   Serial.println("Available commands:");
-  Serial.println("--2020-06-25-------");
-  Serial.println("N = 0 for aNalog flow reference");
-  Serial.println("T for sampl Time [us] int");
+  Serial.println("-------------------");
+  Serial.println("T for sample Time [us] int");
   Serial.println("Q = 1 for quiet, Q = 0 verbose");
   Serial.println("Q = 3 for special, Q = 4 for abbreviated");
   Serial.println("Q = 5 outputs A1 analogue in");
   Serial.println("Q = 6 outputs Flow, SupplyP, FusedFlow2");
   Serial.println("Verbose data: dP, Flow, SupplyP, Fused Flow");
   Serial.println("Z zeroes controller integrator");
-  Serial.println("E selects Ext (1 default) 12 bitar/ Int (0) 10 bitar PWM");
+  Serial.println("E selects Ext (1 default) 12 bit / Int (0) 10 bit PWM");
   Serial.println("F for flow ref value [L/min] float");
-  Serial.println("I for int const [-] float");
-  Serial.println("P for propo const [-] float");
-  Serial.println("D for integrat const [-] float");
+  Serial.println("I for integral const [-] float");
+  Serial.println("P for proportional const [-] float");
+  Serial.println("D for derivative const [-] float");
   Serial.println("C for controller mode");
   Serial.println("  0 = PI controller, 1 = Valve set value");
-  Serial.println("  2 = Sine, 3 = step, 4 = Triangle");
+  Serial.println("  2 = Sine, 3 = Step, 4 = Triangle");
   Serial.println("O for Offset in [%], float 0.0-100.0");
   Serial.println("A for Amplitude in [%], float 0.0-100.0");
-  Serial.println("S for Samples per period of pulses or sine, int");
+  Serial.println("S for period time in [seconds], float");
   Serial.println("V for manual setting of valve output [%], float 0.0-100.0");
-  Serial.println("R for rise time could be added another day");
   Serial.println("! lists current settings");
 }
 
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,
-                                  float offset, float amplitude, int samples_per_period,
+                                  float offset, float amplitude, float period_seconds,
                                   float valve_signal) {
-  Serial.printf("T= %lu\n", config.delta_t);
+  Serial.printf("T= %lu us\n", config.delta_t);
+  Serial.printf("F= %.2f L/min\n", config.digital_flow_reference);
   Serial.printf("Q= %d\n", config.quiet_mode);
   Serial.printf("C= %d\n", controller_mode);
   Serial.printf("O= %.2f %%\n", offset);
   Serial.printf("A= %.2f %%\n", amplitude);
-  Serial.printf("S= %d\n", samples_per_period);
+  Serial.printf("S= %.3f s\n", period_seconds);
   Serial.printf("V= %.2f %%\n", valve_signal);
   Serial.println();
 }
@@ -132,17 +131,6 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
   }
   
   switch (cmd) {
-    case 'N': case 'n':  // Analog/digital flow reference selection
-      if (params.length() > 0) {
-        config.flow_setting_is_analog = (params.toInt() != 0);
-        Serial.print(config.flow_setting_is_analog);
-        sendOK();
-      } else {
-        Serial.print("N= ");
-        Serial.println(config.flow_setting_is_analog);
-      }
-      break;
-      
     case 'F': case 'f':  // Flow reference value
       if (params.length() > 0) {
         config.digital_flow_reference = params.toFloat();
@@ -323,21 +311,23 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
       }
       break;
       
-    case 'S': case 's':  // Samples per period
+    case 'S': case 's':  // Period time in seconds
       {
         SignalGeneratorConfig sigConfig = actuator.getSignalGeneratorConfig();
         if (params.length() > 0) {
-          int samples = params.toInt();
-          if (samples < 0) samples = 0;
-          if (samples > 65535) samples = 65535;
-          sigConfig.samples_per_period = samples;
+          float period_sec = params.toFloat();
+          if (period_sec < 0.001) period_sec = 0.001;  // Minimum 1ms
+          if (period_sec > 3600.0) period_sec = 3600.0;  // Maximum 1 hour
+          sigConfig.period_seconds = period_sec;
           actuator.setSignalGeneratorConfig(sigConfig);
           Serial.print("S= ");
-          Serial.print(sigConfig.samples_per_period);
+          Serial.print(sigConfig.period_seconds, 3);
+          Serial.print(" s");
           sendOK();
         } else {
           Serial.print("S= ");
-          Serial.println(sigConfig.samples_per_period);
+          Serial.print(sigConfig.period_seconds, 3);
+          Serial.println(" s");
         }
       }
       break;
@@ -351,7 +341,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
         SignalGeneratorConfig sigConfig = actuator.getSignalGeneratorConfig();
         printSettings(config, actuator.getControllerMode(),
                      sigConfig.offset, sigConfig.amplitude,
-                     sigConfig.samples_per_period,
+                     sigConfig.period_seconds,
                      actuator.getValveControlSignal());
       }
       break;

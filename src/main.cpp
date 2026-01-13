@@ -261,6 +261,7 @@ void loop() {
   static bool pressureCommandSent = false;
   uint32_t currentTime = micros();
 
+  // Check if it's time to handle pressure measurement
   if (sensorsInitialized && (currentTime - lastPressureTime) >= sysConfig.PressSamplTime) {
     lastPressureTime = currentTime;
 
@@ -320,11 +321,8 @@ void loop() {
     // Can use either legacy flow OR SFM3505 O2 flow
     // ========================================================================
 
-    // Option 1: Use legacy flow sensor
+    // 
     actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
-
-    // Option 2: Use SFM3505 O2 flow (uncomment to use)
-    // actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.sfm3505_o2_flow, sysConfig.quiet_mode);
 
     // ========================================================================
     // Update WiFi server with Bus 0 data (primary)
@@ -353,10 +351,10 @@ void loop() {
   if (millis() - lastSerialSend > 1000) {  // Send every 1 second
     lastSerialSend = millis();
 
-    // Send valve command
-    char actuatorCMD = 'V';
+    // // Send valve command
+    // char actuatorCMD = 'V';
     float localValveCtrl = actuator.getValveControlSignal();
-    actuator.sendSerialCommand(actuatorCMD, localValveCtrl);
+    // actuator.sendSerialCommand(actuatorCMD, localValveCtrl);
 
     // Access received data via helpers (non-blocking)
     float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
@@ -365,7 +363,7 @@ void loop() {
 
     // Print misc data with proper handling of non-printable characters
     if (!actuatorReader.isCurrentStale()) {
-      hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A],",
+      hostCom.printf("[Serial1] Set: V%.2f | Received: I= %.3f [A]",
                      localValveCtrl, actuatorCurrent);
 
       if (!actuatorReader.isMiscStale()) {
@@ -380,9 +378,11 @@ void loop() {
         }
       }
       hostCom.printf("\n");
+    } else {
+      hostCom.printf("[Serial1] Set: V%.2f | Received: I= STALE data\n",
+                     localValveCtrl);
     }
   }
-
   //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], No misc data (stale)\n",
   //                    localValveCtrl, actuatorCurrent);
   //   } else

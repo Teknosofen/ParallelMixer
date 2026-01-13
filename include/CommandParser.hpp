@@ -10,7 +10,6 @@ struct SystemConfig {
   uint32_t delta_t;                    // Sampling time in microseconds
   uint32_t PressSamplTime;             // ABP2 pressure sampling time in microseconds (default: 10000 = 100Hz)
   int16_t quiet_mode;                  // 0=verbose, 1=quiet, 2-6=special modes
-  bool flow_setting_is_analog;         // true=analog, false=digital
   float digital_flow_reference;        // Digital flow reference in L/min
 };
 
@@ -39,7 +38,7 @@ public:
   static void sendError();
   static void printHelp();
   static void printSettings(const SystemConfig& config, int controller_mode,
-                           float offset, float amplitude, int samples_per_period,
+                           float offset, float amplitude, float period_seconds,
                            float valve_signal);
   
 private:

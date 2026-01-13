@@ -27,7 +27,7 @@ struct PIDConfig {
 struct SignalGeneratorConfig {
   float offset;           // Offset as percentage (0.0-100.0%)
   float amplitude;        // Amplitude as percentage (0.0-100.0%)
-  uint16_t samples_per_period;
+  float period_seconds;   // Period time in seconds
 };
 
 struct ControlState {
@@ -93,6 +93,7 @@ private:
   // Signal generator state
   SignalGeneratorConfig _sig_gen_config;
   uint16_t _index_in_period;
+  uint32_t _period_start_time_us;  // Microseconds timestamp of period start
   uint16_t _valve_signal_externally_set;
   uint16_t _valve_signal_generated;
 
@@ -103,10 +104,10 @@ private:
   void outputToValve(uint16_t signal);
   void analogOutMCP4725(uint16_t dac_output);
 
-  // Signal generators
-  uint16_t generateSine();
-  uint16_t generateStep();
-  uint16_t generateTriangle();
+  // Signal generators (phase is 0.0 to 1.0)
+  uint16_t generateSine(float phase);
+  uint16_t generateStep(float phase);
+  uint16_t generateTriangle(float phase);
 
   // Conversion helpers - hardware abstraction
   // These methods encapsulate knowledge about hardware resolution (12-bit = 0-4095)
