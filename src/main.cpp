@@ -57,7 +57,8 @@ SensorData sensorData_bus1;  // Data from Bus 1 sensors
 bool sensorsInitialized = false;
 
 // Timing
-uint32_t past_time;
+uint32_t past_time;          // For GUI/serial output timing
+uint32_t control_past_time;  // For control system execution timing
 
 void outputData() {
   // Output data from Bus 0 (primary sensors)
@@ -84,7 +85,59 @@ void outputData() {
       }
       break;
 
-    case 3:  // Special - controlled by actuator.execute()
+    case 3:  // Special - controller mode + setting + Serial1 actuator data
+      {
+        // Get controller mode
+        ControllerMode mode = actuator.getControllerMode();
+        String modeStr;
+        switch (mode) {
+          case PID_CONTROL:
+            modeStr = "PID";
+            break;
+          case VALVE_SET_VALUE_CONTROL:
+            modeStr = "Set";
+            break;
+          case SINE_CONTROL:
+            modeStr = "Sine";
+            break;
+          case STEP_CONTROL:
+            modeStr = "Step";
+            break;
+          case TRIANGLE_CONTROL:
+            modeStr = "Triangle";
+            break;
+          default:
+            modeStr = "Unknown";
+            break;
+        }
+
+        // Get valve control signal and Serial1 data
+        float localValveCtrl = actuator.getValveControlSignal();
+        float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
+        float actuatorMisc = actuatorReader.getValveActuatorMisc();
+        char miscCmd = actuatorReader.getValveActuatorMiscCommand();
+
+        // Print unified output: Mode, Setting, and Received data
+        if (!actuatorReader.isCurrentStale()) {
+          hostCom.printf("[%s] V=%.2f%% -> Actuator: I=%.3fA",
+                         modeStr.c_str(), localValveCtrl, actuatorCurrent);
+
+          if (!actuatorReader.isMiscStale()) {
+            if (miscCmd >= 32 && miscCmd <= 126) {
+              // Printable ASCII character
+              hostCom.printf(" %c=%.2f\n", miscCmd, actuatorMisc);
+            } else {
+              // Non-printable character - show hex value
+              hostCom.printf(" [0x%02X]=%.2f\n", (uint8_t)miscCmd, actuatorMisc);
+            }
+          } else {
+            hostCom.printf("\n");
+          }
+        } else {
+          hostCom.printf("[%s] V=%.2f%% -> Actuator: STALE data\n",
+                         modeStr.c_str(), localValveCtrl);
+        }
+      }
       break;
 
     case 4:  // Abbreviated: dP, Flow, Valve signal
@@ -147,8 +200,9 @@ void setup() {
   delay(2000);
 
   // Initialize system configuration
-  sysConfig.delta_t = 100000;          // Main loop: 100ms = 10Hz
-  sysConfig.PressSamplTime = 100000;    // Pressure: 100ms = 10Hz
+  sysConfig.delta_t = 100000;          // GUI/Serial output: 100ms = 10Hz (T command)
+  sysConfig.control_interval = 10000;  // Control execution: 10ms = 100Hz (X command)
+  sysConfig.PressSamplTime = 100000;   // Pressure: 100ms = 10Hz
   sysConfig.quiet_mode = 0;            // Verbose output
   sysConfig.digital_flow_reference = 0.0;
 
@@ -171,16 +225,21 @@ void setup() {
   digitalWrite(I2C0_PULLUP_CTRL_PIN, HIGH);  // Enable pull-ups via GPIO21
   delay(10);
 
-  renderer.showLinesOnScreen("SCANNING", "I2C-bus", "");
-
   // Scan I2C bus for devices
   hostCom.println("Scanning I2C bus...");
   int deviceCount = 0;
+  String bus0Addresses = "";
 
   for (byte address = 0x01; address < 0x7F; address++) {
     Wire.beginTransmission(address);
     if (Wire.endTransmission() == 0) {
       hostCom.printf("  0x%02X", address);
+
+      // Build address string for screen display
+      if (deviceCount > 0) bus0Addresses += " ";
+      bus0Addresses += "0x";
+      if (address < 0x10) bus0Addresses += "0";
+      bus0Addresses += String(address, HEX);
 
       // Identify known devices
       if (address == 0x2E) hostCom.print(" - SFM3505 (flow)");
@@ -196,11 +255,16 @@ void setup() {
 
   if (deviceCount == 0) {
     hostCom.println("  ⚠️ No I2C devices found!");
+    bus0Addresses = "None found";
   } else {
     hostCom.printf("  ✅ Found %d device(s)\n", deviceCount);
   }
   hostCom.println();
-  delay(1000);
+
+  // Display I2C scan results on screen
+  String line2 = "Bus 0: " + bus0Addresses;
+  renderer.showLinesOnScreen("I2C devices found", line2.c_str(), "Bus 1: N/A");
+  delay(2000);
 
   // Create sensor reader
   sensors_bus0 = new SensorReader(&Wire, "Bus0");
@@ -234,6 +298,7 @@ void setup() {
   actuator.setSerialActuatorReader(&actuatorReader);
 
   past_time = micros();
+  control_past_time = micros();
 
   hostCom.println("╔═══════════════════════════════╗");
   hostCom.println("║         SYSTEM READY          ║");
@@ -281,7 +346,21 @@ void loop() {
   }
 
   // ============================================================================
-  // Main control loop timing
+  // Control system execution timing (X command - typically faster)
+  // ============================================================================
+
+  if ((micros() - control_past_time) >= sysConfig.control_interval) {
+    control_past_time = micros();
+
+    // ========================================================================
+    // Execute control - using Bus 0 as primary
+    // Can use either legacy flow OR SFM3505 O2 flow
+    // ========================================================================
+    actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+  }
+
+  // ============================================================================
+  // GUI/Serial output timing (T command - typically slower)
   // ============================================================================
 
   if ((micros() - past_time) >= sysConfig.delta_t) {
@@ -317,14 +396,6 @@ void loop() {
     }
 
     // ========================================================================
-    // Execute control - using Bus 0 as primary
-    // Can use either legacy flow OR SFM3505 O2 flow
-    // ========================================================================
-
-    // 
-    actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
-
-    // ========================================================================
     // Update WiFi server with Bus 0 data (primary)
     // ========================================================================
     wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);  // Send SFM3505 Air flow to web
@@ -346,56 +417,7 @@ void loop() {
   //   hostCom.printf("[Serial2 RX]: %s\n", data.c_str());
   // }
 
-  // Send data to external microcontroller via Serial1
-  static uint32_t lastSerialSend = 0;
-  if (millis() - lastSerialSend > 1000) {  // Send every 1 second
-    lastSerialSend = millis();
-
-    // // Send valve command
-    // char actuatorCMD = 'V';
-    float localValveCtrl = actuator.getValveControlSignal();
-    // actuator.sendSerialCommand(actuatorCMD, localValveCtrl);
-
-    // Access received data via helpers (non-blocking)
-    float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
-    float actuatorMisc = actuatorReader.getValveActuatorMisc();
-    char miscCmd = actuatorReader.getValveActuatorMiscCommand();
-
-    // Print misc data with proper handling of non-printable characters
-    if (!actuatorReader.isCurrentStale()) {
-      hostCom.printf("[Serial1] Set: V%.2f | Received: I= %.3f [A]",
-                     localValveCtrl, actuatorCurrent);
-
-      if (!actuatorReader.isMiscStale()) {
-        if (miscCmd >= 32 && miscCmd <= 126) {
-          // Printable ASCII character
-          hostCom.printf(" %c=%.2f\n",
-                      miscCmd, actuatorMisc);
-        } else {
-          // Non-printable character - show hex value
-          hostCom.printf(" [0x%02X]=%.2f (non-printable)\n",
-                        (uint8_t)miscCmd, actuatorMisc);
-        }
-      }
-      hostCom.printf("\n");
-    } else {
-      hostCom.printf("[Serial1] Set: V%.2f | Received: I= STALE data\n",
-                     localValveCtrl);
-    }
-  }
-  //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], No misc data (stale)\n",
-  //                    localValveCtrl, actuatorCurrent);
-  //   } else
-  //   if (miscCmd >= 32 && miscCmd <= 126) {
-  //     // Printable ASCII character
-  //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], %c=%.2f\n",
-  //                    localValveCtrl, actuatorCurrent, miscCmd, actuatorMisc);
-  //   } else {
-  //     // Non-printable character - show hex value
-  //     hostCom.printf("[Serial1] Sent: V%.2f | Received: I=%.3f [A], [0x%02X]=%.2f (non-printable)\n",
-  //                    localValveCtrl, actuatorCurrent, (uint8_t)miscCmd, actuatorMisc);
-  //   }
-  // }
+  // Serial1 actuator data output is now in outputData() function for quiet_mode == 3
 
   // ============================================================================
   // Command parser and UI updates

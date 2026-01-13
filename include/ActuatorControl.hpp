@@ -34,7 +34,7 @@ struct ControlState {
   float error;
   float integrator;
   float output;
-  uint16_t valve_signal;
+  float valve_signal;  // Percentage (0-100%)
 };
 
 class ActuatorControl {
@@ -51,12 +51,12 @@ public:
   void setPIDConfig(const PIDConfig& config);
   PIDConfig getPIDConfig() const;
   void resetPIDState();
-  uint16_t updatePID(float flow_reference, float flow_measured);
+  float updatePID(float flow_reference, float flow_measured);  // Returns percentage (0-100%)
   
   // Signal generator control
   void setSignalGeneratorConfig(const SignalGeneratorConfig& config);
   SignalGeneratorConfig getSignalGeneratorConfig() const;
-  uint16_t updateSignalGenerator();
+  float updateSignalGenerator();  // Returns percentage (0-100%)
   
   // Direct valve control (percentage-based interface)
   void setValveControlSignal(float percent);  // 0.0-100.0%
@@ -94,20 +94,20 @@ private:
   SignalGeneratorConfig _sig_gen_config;
   uint16_t _index_in_period;
   uint32_t _period_start_time_us;  // Microseconds timestamp of period start
-  uint16_t _valve_signal_externally_set;
-  uint16_t _valve_signal_generated;
+  float _valve_signal_externally_set;  // Percentage (0-100%)
+  float _valve_signal_generated;      // Percentage (0-100%)
 
   // Serial actuator reader pointer (for forwarding serial calls)
   SerialActuatorReader* _serialActuatorReader;
 
-  // Output methods
-  void outputToValve(uint16_t signal);
+  // Output methods (now accepts percentage)
+  void outputToValve(float signal_percent);
   void analogOutMCP4725(uint16_t dac_output);
 
-  // Signal generators (phase is 0.0 to 1.0)
-  uint16_t generateSine(float phase);
-  uint16_t generateStep(float phase);
-  uint16_t generateTriangle(float phase);
+  // Signal generators (phase is 0.0 to 1.0, returns percentage)
+  float generateSine(float phase);
+  float generateStep(float phase);
+  float generateTriangle(float phase);
 
   // Conversion helpers - hardware abstraction
   // These methods encapsulate knowledge about hardware resolution (12-bit = 0-4095)

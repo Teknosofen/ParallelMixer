@@ -65,7 +65,8 @@ void CommandParser::sendError() {
 void CommandParser::printHelp() {
   Serial.println("Available commands:");
   Serial.println("-------------------");
-  Serial.println("T for sample Time [us] int");
+  Serial.println("T for GUI/serial output interval [us] int");
+  Serial.println("X for control system execution interval [us] int");
   Serial.println("Q = 1 for quiet, Q = 0 verbose");
   Serial.println("Q = 3 for special, Q = 4 for abbreviated");
   Serial.println("Q = 5 outputs A1 analogue in");
@@ -90,7 +91,8 @@ void CommandParser::printHelp() {
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,
                                   float offset, float amplitude, float period_seconds,
                                   float valve_signal) {
-  Serial.printf("T= %lu us\n", config.delta_t);
+  Serial.printf("T= %lu us (GUI/serial output)\n", config.delta_t);
+  Serial.printf("X= %lu us (control execution)\n", config.control_interval);
   Serial.printf("F= %.2f L/min\n", config.digital_flow_reference);
   Serial.printf("Q= %d\n", config.quiet_mode);
   Serial.printf("C= %d\n", controller_mode);
@@ -142,20 +144,38 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
       }
       break;
       
-    case 'T': case 't':  // Sampling time
+    case 'T': case 't':  // GUI/Serial output interval
       if (params.length() > 0) {
         config.delta_t = params.toInt();
         if (config.delta_t < 0) config.delta_t = 0;
-        if (config.delta_t > 32767) config.delta_t = 32767;
+        if (config.delta_t > 1000000) config.delta_t = 1000000;  // Max 1 second
         Serial.print("T= ");
         Serial.print(config.delta_t);
+        Serial.print(" us");
         sendOK();
       } else {
-        Serial.print("Dt= ");
-        Serial.println(config.delta_t);
+        Serial.print("T= ");
+        Serial.print(config.delta_t);
+        Serial.println(" us");
       }
       break;
-      
+
+    case 'X': case 'x':  // Control system execution interval
+      if (params.length() > 0) {
+        config.control_interval = params.toInt();
+        if (config.control_interval < 1000) config.control_interval = 1000;  // Min 1ms
+        if (config.control_interval > 1000000) config.control_interval = 1000000;  // Max 1 second
+        Serial.print("X= ");
+        Serial.print(config.control_interval);
+        Serial.print(" us");
+        sendOK();
+      } else {
+        Serial.print("X= ");
+        Serial.print(config.control_interval);
+        Serial.println(" us");
+      }
+      break;
+
     case 'Q': case 'q':  // Quiet mode
       if (params.length() > 0) {
         config.quiet_mode = params.toInt();

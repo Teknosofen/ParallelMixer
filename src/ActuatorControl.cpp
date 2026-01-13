@@ -8,8 +8,8 @@ ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
     _external_pwm(true),
     _index_in_period(0),
     _period_start_time_us(0),
-    _valve_signal_externally_set(0),
-    _valve_signal_generated(0),
+    _valve_signal_externally_set(0.0),
+    _valve_signal_generated(0.0),
     _serialActuatorReader(nullptr) {
 
   // Default PID configuration
@@ -53,30 +53,31 @@ void ActuatorControl::resetPIDState() {
   _control_state.error = 0.0;
   _control_state.integrator = 0.0;
   _control_state.output = 0.0;
-  _control_state.valve_signal = 0;
+  _control_state.valve_signal = 0.0;
 }
 
-uint16_t ActuatorControl::updatePID(float flow_reference, float flow_measured) {
+float ActuatorControl::updatePID(float flow_reference, float flow_measured) {
   _control_state.error = flow_reference - flow_measured;
   _control_state.integrator += _control_state.error;
-  
-  _control_state.output = _pid_config.p_gain * _control_state.error + 
+
+  _control_state.output = _pid_config.p_gain * _control_state.error +
                           _pid_config.i_gain * _control_state.integrator;
-  
-  uint16_t valve_signal = uint16_t(_control_state.output + _pid_config.valve_offset);
-  
-  // Clamp to valid range
-  if (valve_signal > 4095) valve_signal = 4095;
-  
+
+  float valve_signal = _control_state.output + _pid_config.valve_offset;
+
+  // Clamp to valid percentage range (0-100%)
+  if (valve_signal < 0.0) valve_signal = 0.0;
+  if (valve_signal > 100.0) valve_signal = 100.0;
+
   // Zero output if reference is zero
   if (flow_reference == 0) {
-    valve_signal = 0;
-    _control_state.integrator = 0;
+    valve_signal = 0.0;
+    _control_state.integrator = 0.0;
   }
-  
+
   _control_state.valve_signal = valve_signal;
   outputToValve(valve_signal);
-  
+
   return valve_signal;
 }
 
@@ -90,7 +91,7 @@ SignalGeneratorConfig ActuatorControl::getSignalGeneratorConfig() const {
   return _sig_gen_config;
 }
 
-uint16_t ActuatorControl::updateSignalGenerator() {
+float ActuatorControl::updateSignalGenerator() {
   // Initialize period start time if not set
   if (_period_start_time_us == 0) {
     _period_start_time_us = micros();
@@ -109,7 +110,7 @@ uint16_t ActuatorControl::updateSignalGenerator() {
   // Calculate normalized position in period (0.0 to 1.0)
   float phase = (float)elapsed_us / (float)period_us;
 
-  uint16_t signal = 0;
+  float signal = 0.0;
 
   switch (_controller_mode) {
     case SINE_CONTROL:
@@ -122,7 +123,7 @@ uint16_t ActuatorControl::updateSignalGenerator() {
       signal = generateTriangle(phase);
       break;
     default:
-      signal = 0;
+      signal = 0.0;
       break;
   }
 
@@ -132,7 +133,7 @@ uint16_t ActuatorControl::updateSignalGenerator() {
   return signal;
 }
 
-uint16_t ActuatorControl::generateSine(float phase) {
+float ActuatorControl::generateSine(float phase) {
   // Calculate sine wave: offset ± amplitude/2
   // Formula generates values from offset-amplitude/2 to offset+amplitude/2
   // phase is 0.0 to 1.0 representing position in the period
@@ -140,11 +141,14 @@ uint16_t ActuatorControl::generateSine(float phase) {
                          (1.0 + sin(6.28318530718 * phase));  // 2*PI*phase
   float total_percent = signal_percent + _sig_gen_config.offset;
 
-  // Convert percentage to hardware units
-  return percentToHardware(total_percent);
+  // Clamp to valid percentage range
+  if (total_percent < 0.0) total_percent = 0.0;
+  if (total_percent > 100.0) total_percent = 100.0;
+
+  return total_percent;
 }
 
-uint16_t ActuatorControl::generateStep(float phase) {
+float ActuatorControl::generateStep(float phase) {
   // Generate step wave alternating between two levels
   // phase is 0.0 to 1.0 representing position in the period
   float signal_percent;
@@ -155,11 +159,14 @@ uint16_t ActuatorControl::generateStep(float phase) {
     signal_percent = _sig_gen_config.offset;
   }
 
-  // Convert percentage to hardware units
-  return percentToHardware(signal_percent);
+  // Clamp to valid percentage range
+  if (signal_percent < 0.0) signal_percent = 0.0;
+  if (signal_percent > 100.0) signal_percent = 100.0;
+
+  return signal_percent;
 }
 
-uint16_t ActuatorControl::generateTriangle(float phase) {
+float ActuatorControl::generateTriangle(float phase) {
   // Generate triangle wave
   // phase is 0.0 to 1.0 representing position in the period
   float signal_percent;
@@ -174,33 +181,34 @@ uint16_t ActuatorControl::generateTriangle(float phase) {
                      _sig_gen_config.amplitude * (2.0 - phase * 2.0);
   }
 
-  // Convert percentage to hardware units
-  return percentToHardware(signal_percent);
+  // Clamp to valid percentage range
+  if (signal_percent < 0.0) signal_percent = 0.0;
+  if (signal_percent > 100.0) signal_percent = 100.0;
+
+  return signal_percent;
 }
 
 void ActuatorControl::setValveControlSignal(float percent) {
-  // Convert percentage to hardware units and store
-  uint16_t signal = percentToHardware(percent);
-  _valve_signal_externally_set = signal;
+  // Clamp to valid range
+  if (percent < 0.0) percent = 0.0;
+  if (percent > 100.0) percent = 100.0;
+
+  _valve_signal_externally_set = percent;
 
   if (_controller_mode == VALVE_SET_VALUE_CONTROL) {
-    outputToValve(signal);
+    outputToValve(percent);
   }
 }
 
 float ActuatorControl::getValveControlSignal() const {
-  // Return current valve signal as percentage
-  uint16_t hardware_value;
-
+  // Return current valve signal as percentage (already in %)
   if (_controller_mode == VALVE_SET_VALUE_CONTROL) {
-    hardware_value = _valve_signal_externally_set;
+    return _valve_signal_externally_set;
   } else if (_controller_mode == PID_CONTROL) {
-    hardware_value = _control_state.valve_signal;
+    return _control_state.valve_signal;
   } else {
-    hardware_value = _valve_signal_generated;
+    return _valve_signal_generated;
   }
-
-  return hardwareToPercent(hardware_value);
 }
 
 void ActuatorControl::setExternalPWM(bool external) {
@@ -215,17 +223,19 @@ ControlState ActuatorControl::getControlState() const {
   return _control_state;
 }
 
-void ActuatorControl::outputToValve(uint16_t signal) {
-  // Send valve command via serial to external actuator
+void ActuatorControl::outputToValve(float signal_percent) {
+  // Send valve command via serial to external actuator (percentage-based)
   char actuatorCMD = 'V';
-  float localValveCtrl = hardwareToPercent(signal);
-  sendSerialCommand(actuatorCMD, localValveCtrl);
+  sendSerialCommand(actuatorCMD, signal_percent);
+  // Serial.println("valve CMD " + String(signal_percent) + "% " + String(millis()));
 
   // Legacy hardware output (commented out - now using serial actuator)
+  // Convert percentage to hardware units only for legacy hardware
+  // uint16_t hardware_signal = percentToHardware(signal_percent);
   // if (_external_pwm) {
-  //   analogOutMCP4725(signal);
+  //   analogOutMCP4725(hardware_signal);
   // } else {
-  //   analogWrite(_valve_ctrl_pin, signal);
+  //   analogWrite(_valve_ctrl_pin, hardware_signal);
   // }
 }
 
@@ -246,34 +256,22 @@ void ActuatorControl::execute(float flow_reference, float flow_measured, int qui
     case VALVE_SET_VALUE_CONTROL:
       // Output the set valve signal (ensure serial actuator receives updates)
       outputToValve(_valve_signal_externally_set);
-      if (quiet_mode == 3) {
-        Serial.print("Set value ");
-        Serial.println(getValveControlSignal());
-      }
+      // Note: quiet_mode == 3 output is now handled in outputData() function
       break;
-      
+
     case SINE_CONTROL:
       updateSignalGenerator();
-      if (quiet_mode == 3) {
-        Serial.print("Sine ");
-        Serial.println(getValveControlSignal());
-      }
+      // Note: quiet_mode == 3 output is now handled in outputData() function
       break;
-      
+
     case STEP_CONTROL:
       updateSignalGenerator();
-      if (quiet_mode == 3) {
-        Serial.print("pulse ");
-        Serial.println(getValveControlSignal());
-      }
+      // Note: quiet_mode == 3 output is now handled in outputData() function
       break;
-      
+
     case TRIANGLE_CONTROL:
       updateSignalGenerator();
-      if (quiet_mode == 3) {
-        Serial.print("Triangle ");
-        Serial.println(getValveControlSignal());
-      }
+      // Note: quiet_mode == 3 output is now handled in outputData() function
       break;
   }
 }
