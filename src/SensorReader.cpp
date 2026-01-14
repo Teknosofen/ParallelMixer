@@ -1,8 +1,8 @@
 #include "SensorReader.hpp"
 
 SensorReader::SensorReader(TwoWire* wire, const char* name)
-  : _wire(wire), _name(name) {
-  // No configuration needed
+  : _wire(wire), _name(name), _hasSFM3505(false), _hasABP2(false), _hasABPD(false) {
+  // Detection flags will be set during initialize()
 }
 
 bool SensorReader::initialize() {
@@ -13,57 +13,70 @@ bool SensorReader::initialize() {
 
   Serial.printf("Initializing %s sensors...\n", _name);
 
-  // ============================================================================
-  // Initialize SFM3505 flow sensor ONLY (legacy sensors disabled)
-  // ============================================================================
+  // Reset detection flags
+  _hasSFM3505 = false;
+  _hasABP2 = false;
+  _hasABPD = false;
 
-  // First, check if device responds at address 0x2E
+  // ============================================================================
+  // Detect SFM3505 flow sensor
+  // ============================================================================
   Serial.printf("[%s] Checking for SFM3505 at address 0x%02X...\n", _name, I2Cadr_SFM3505);
   _wire->beginTransmission(I2Cadr_SFM3505);
   byte error = _wire->endTransmission();
 
   if (error == 0) {
-    Serial.printf("[%s] ✅ Device ACK received at 0x%02X\n", _name, I2Cadr_SFM3505);
+    Serial.printf("[%s] ✅ SFM3505 detected\n", _name);
+    _hasSFM3505 = true;
+
+    // Start continuous measurement
+    delay(50);
+    Serial.printf("[%s] Starting SFM3505 continuous measurement...\n", _name);
+    if (startSFM3505Measurement()) {
+      Serial.printf("[%s] ✅ SFM3505 measurement started\n", _name);
+    } else {
+      Serial.printf("[%s] ⚠️ SFM3505 start command failed (may already be running)\n", _name);
+    }
   } else {
-    Serial.printf("[%s] ❌ No ACK from device at 0x%02X (error: %d)\n", _name, I2Cadr_SFM3505, error);
-    Serial.printf("[%s]    Check: sensor model, address, wiring\n", _name);
-    return false;
+    Serial.printf("[%s] ⚠️ SFM3505 not detected at 0x%02X\n", _name);
   }
 
-  // Add delay after scan before sending commands
-  delay(50);
-
   // ============================================================================
-  // Initialize ABP2 Pressure Sensor
+  // Detect ABP2 Pressure Sensor
   // ============================================================================
-  Serial.printf("[%s] Checking for ABP2 pressure sensor at address 0x%02X...\n", _name, I2Cadr_ABP2);
+  Serial.printf("[%s] Checking for ABP2 at address 0x%02X...\n", _name, I2Cadr_ABP2);
   _wire->beginTransmission(I2Cadr_ABP2);
   byte abp2_error = _wire->endTransmission();
 
   if (abp2_error == 0) {
-    Serial.printf("[%s] ✅ ABP2 pressure sensor found\n", _name);
-    Serial.printf("[%s]    Sensor will use asynchronous measurement (see startABP2Measurement/readABP2Pressure)\n", _name);
-    Serial.printf("[%s]    Main loop will control timing - no delays here!\n", _name);
+    Serial.printf("[%s] ✅ ABP2 detected (asynchronous measurement)\n", _name);
+    _hasABP2 = true;
   } else {
-    Serial.printf("[%s] ⚠️ No ABP2 pressure sensor found at 0x%02X (error=%d)\n", _name, I2Cadr_ABP2, abp2_error);
-    Serial.printf("[%s]    Pressure readings will return 0.0 kPa\n", _name);
+    Serial.printf("[%s] ⚠️ ABP2 not detected at 0x%02X\n", _name);
   }
 
   // ============================================================================
-  // Initialize SFM3505 Flow Sensor
+  // Detect ABPD Low Pressure Sensor
   // ============================================================================
+  Serial.printf("[%s] Checking for ABPD at address 0x%02X...\n", _name, I2Cadr_ABPD);
+  _wire->beginTransmission(I2Cadr_ABPD);
+  byte abpd_error = _wire->endTransmission();
 
-  // Start SFM3505 continuous measurement (skip Product ID check)
-  Serial.printf("[%s] Starting SFM3505 continuous measurement...\n", _name);
-  if (startSFM3505Measurement()) {
-    Serial.printf("[%s] ✅ SFM3505 initialized and measurement started\n", _name);
-    return true;
+  if (abpd_error == 0) {
+    Serial.printf("[%s] ✅ ABPD detected\n", _name);
+    _hasABPD = true;
   } else {
-    Serial.printf("[%s] ⚠️ SFM3505 start command failed\n", _name);
-    Serial.printf("[%s] ⚠️ IGNORING ERROR - will attempt to read data anyway\n", _name);
-    Serial.printf("[%s]    Sensor may already be in continuous mode\n", _name);
-    return true;  // Return true anyway to allow reading attempts
+    Serial.printf("[%s] ⚠️ ABPD not detected at 0x%02X\n", _name);
   }
+
+  // ============================================================================
+  // Summary
+  // ============================================================================
+  int detectedCount = (_hasSFM3505 ? 1 : 0) + (_hasABP2 ? 1 : 0) + (_hasABPD ? 1 : 0);
+  Serial.printf("[%s] Sensor detection complete: %d/3 sensors found\n", _name, detectedCount);
+
+  // Return true if at least one sensor was detected
+  return (detectedCount > 0);
 
   // ============================================================================
   // LEGACY SENSORS DISABLED - ONLY USING SFM3505
@@ -397,6 +410,64 @@ bool SensorReader::readABP2Pressure(float& pressure_kpa, uint8_t& status_byte) {
 
   // Convert PSI to kPa (1 PSI = 6.89476 kPa)
   pressure_kpa = pressure_psi * 6.89476;
+
+  return true;
+}
+
+// ============================================================================
+// ABPDLNN100MG2A3 Low Pressure Sensor Methods
+// ============================================================================
+// Honeywell ABPDLNN100MG2A3 - 0-100 mbar differential/low pressure sensor
+// 14-bit digital output with temperature
+// Based on SSC protocol (similar to ABP2 but different output format)
+
+bool SensorReader::readABPDPressureTemp(float& pressure_kpa, float& temperature_c, uint8_t& status_byte) {
+  // Request 4 bytes from ABPD sensor
+  uint8_t bytesRead = _wire->requestFrom(I2Cadr_ABPD, (uint8_t)4);
+
+  if (bytesRead != 4) {
+    Serial.printf("[%s] ❌ ABPD error: Expected 4 bytes, got %d\n", _name, bytesRead);
+    pressure_kpa = 0.0;
+    temperature_c = 0.0;
+    return false;
+  }
+
+  // Read all 4 bytes
+  uint8_t msb = _wire->read();      // Byte 0: Status (2 bits) + Pressure MSB (6 bits)
+  uint8_t lsb = _wire->read();      // Byte 1: Pressure LSB (8 bits)
+  uint8_t temp_msb = _wire->read(); // Byte 2: Temperature MSB (8 bits)
+  uint8_t temp_lsb = _wire->read(); // Byte 3: Temperature LSB (3 bits valid)
+
+  // Extract status bits (bits 7-6 of first byte)
+  status_byte = msb >> 6;
+
+  // Extract 14-bit pressure value
+  // Pressure is in bits [13:0] across bytes 0-1
+  // Mask out the 2 status bits from MSB, then combine with LSB
+  uint16_t pressure_counts = ((msb & 0x3F) << 8) | lsb;
+
+  // Extract 11-bit temperature value
+  // Temperature is in bits [10:0] across bytes 2-3
+  // Byte 2 has bits [10:3], Byte 3 has bits [2:0] in upper 3 bits
+  uint16_t temp_counts = (temp_msb << 3) | (temp_lsb >> 5);
+
+  // Convert pressure counts to pressure using transfer function
+  // P = (counts - Output_min) * (Pmax - Pmin) / (Output_max - Output_min) + Pmin
+  // For 100 mbar range (0-100 mbar):
+  //   Output_min = 10% of 2^14 = 1638 counts
+  //   Output_max = 90% of 2^14 = 14745 counts
+  //   Pmin = 0 mbar, Pmax = 100 mbar
+  //   Span = 14745 - 1638 = 13107 counts
+
+  float pressure_mbar = ((float)pressure_counts - 1638.0) * 100.0 / 13107.0;
+
+  // Convert mbar to kPa (1 mbar = 0.1 kPa)
+  pressure_kpa = pressure_mbar * 0.1;
+
+  // Convert temperature counts to temperature in °C
+  // T = (counts / 2047) * 200 - 50
+  // Range: -50°C to +150°C over 11 bits (0-2047)
+  temperature_c = ((float)temp_counts / 2047.0) * 200.0 - 50.0;
 
   return true;
 }

@@ -63,9 +63,11 @@ uint32_t control_past_time;  // For control system execution timing
 void outputData() {
   // Output data from Bus 0 (primary sensors)
   switch (sysConfig.quiet_mode) {
-    case 0:  // Verbose: Pressure, Air flow, Valve signal
-      hostCom.printf("P: %.2f\tAir: %.3f\tValve: %.2f\n",
+    case 0:  // Verbose: Supply Pressure, Low Pressure, Temp, Air flow, Valve signal
+      hostCom.printf("P: %.2f\tLP: %.2f\tT: %.1f\tAir: %.3f\tValve: %.2f\n",
                      sensorData_bus0.supply_pressure,
+                     sensorData_bus0.abpd_pressure,
+                     sensorData_bus0.abpd_temperature,
                      sensorData_bus0.sfm3505_air_flow,
                      actuator.getValveControlSignal());
       break;
@@ -147,10 +149,12 @@ void outputData() {
                      actuator.getValveControlSignal());
       break;
 
-    case 5:  // Flow, Supply Pressure, and SFM3505 Air
-      hostCom.printf("Flow: %.2f SupplyP: %.2f SFM3505_Air: %.3f\n",
+    case 5:  // Flow, Supply Pressure, Low Pressure, Temp, and SFM3505 Air
+      hostCom.printf("Flow: %.2f SupplyP: %.2f LowP: %.2f Temp: %.1f SFM3505_Air: %.3f\n",
                      sensorData_bus0.flow,
                      sensorData_bus0.supply_pressure,
+                     sensorData_bus0.abpd_pressure,
+                     sensorData_bus0.abpd_temperature,
                      sensorData_bus0.sfm3505_air_flow);
       break;
 
@@ -160,6 +164,27 @@ void outputData() {
                      sensorData_bus0.sfm3505_air_flow,
                      sensorData_bus1.sfm3505_o2_flow,
                      sensorData_bus1.sfm3505_air_flow);
+      break;
+
+    // Supply Pressure (kPa, 2 decimals)
+    // Low Pressure (kPa, 2 decimals)
+    // Temperature (°C, 1 decimal)
+    // Air Flow (L/min, 3 decimals)
+    // Valve Control Signal (%, 2 decimals)
+    // Actuator Current (A, 3 decimals)
+    case 7:  // High-speed data logging: tab-separated, no labels (minimal bandwidth)
+      {
+        float localValveCtrl = actuator.getValveControlSignal();
+        float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
+        // Format: SupplyPressure\tLowPressure\tTemp\tAirFlow\tValveSignal\tCurrent\n
+        hostCom.printf("%.2f\t%.2f\t%.1f\t%.3f\t%.2f\t%.3f\n",
+                       sensorData_bus0.supply_pressure,
+                       sensorData_bus0.abpd_pressure,
+                       sensorData_bus0.abpd_temperature,
+                       sensorData_bus0.sfm3505_air_flow,
+                       localValveCtrl,
+                       actuatorCurrent);
+      }
       break;
   }
 }
@@ -247,6 +272,9 @@ void setup() {
       else if (address == 0x60) hostCom.print(" - MCP4725 (DAC)");
       else if (address == 0x76) hostCom.print(" - BME280");
 
+      // ABPDLNN100MG2A3 has address 0x18
+      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)");
+
       hostCom.println();
       deviceCount++;
     }
@@ -326,8 +354,8 @@ void loop() {
   static bool pressureCommandSent = false;
   uint32_t currentTime = micros();
 
-  // Check if it's time to handle pressure measurement
-  if (sensorsInitialized && (currentTime - lastPressureTime) >= sysConfig.PressSamplTime) {
+  // Check if it's time to handle pressure measurement (only if ABP2 detected)
+  if (sensorsInitialized && sensors_bus0->hasABP2() && (currentTime - lastPressureTime) >= sysConfig.PressSamplTime) {
     lastPressureTime = currentTime;
 
     if (!pressureCommandSent) {
@@ -343,6 +371,9 @@ void loop() {
       }
       pressureCommandSent = false;  // Next cycle will send command again
     }
+  } else if (!sensors_bus0->hasABP2()) {
+    // No ABP2 detected - set to zero
+    sensorData_bus0.supply_pressure = 0.0;
   }
 
   // ============================================================================
@@ -353,10 +384,60 @@ void loop() {
     control_past_time = micros();
 
     // ========================================================================
+    // Read SFM3505 Flow Sensor (now in fast control loop)
+    // ========================================================================
+    if (sensorsInitialized && sensors_bus0->hasSFM3505()) {
+      float sfm_air, sfm_o2;
+      if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
+        sensorData_bus0.sfm3505_air_flow = sfm_air;
+        sensorData_bus0.sfm3505_o2_flow = sfm_o2;
+      } else {
+        sensorData_bus0.sfm3505_air_flow = 0.0;
+        sensorData_bus0.sfm3505_o2_flow = 0.0;
+      }
+    } else if (!sensors_bus0->hasSFM3505()) {
+      // No SFM3505 detected - set to zero
+      sensorData_bus0.sfm3505_air_flow = 0.0;
+      sensorData_bus0.sfm3505_o2_flow = 0.0;
+    }
+
+    // ========================================================================
+    // Read ABPD Low Pressure Sensor (now in fast control loop)
+    // ========================================================================
+    static uint32_t lastABPDTime = 0;
+    if (sensorsInitialized && sensors_bus0->hasABPD() && (currentTime - lastABPDTime) >= sysConfig.PressSamplTime) {
+      lastABPDTime = currentTime;
+
+      float abpd_pressure, abpd_temp;
+      uint8_t abpd_status;
+      if (sensors_bus0->readABPDPressureTemp(abpd_pressure, abpd_temp, abpd_status)) {
+        sensorData_bus0.abpd_pressure = abpd_pressure;
+        sensorData_bus0.abpd_temperature = abpd_temp;
+      } else {
+        sensorData_bus0.abpd_pressure = 0.0;
+        sensorData_bus0.abpd_temperature = 0.0;
+      }
+    } else if (!sensors_bus0->hasABPD()) {
+      // No ABPD detected - set to zero
+      sensorData_bus0.abpd_pressure = 0.0;
+      sensorData_bus0.abpd_temperature = 0.0;
+    }
+
+    // ========================================================================
     // Execute control - using Bus 0 as primary
     // Can use either legacy flow OR SFM3505 O2 flow
     // ========================================================================
     actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+
+    // ========================================================================
+    // Update WiFi buffer at high-speed control rate (for 50+ Hz web updates)
+    // ========================================================================
+    wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
+                           sensorData_bus0.supply_pressure,
+                           actuator.getValveControlSignal(),
+                           actuatorReader.getValveActuatorCurrent(),
+                           sensorData_bus0.abpd_pressure,
+                           sensorData_bus0.abpd_temperature);
   }
 
   // ============================================================================
@@ -366,31 +447,10 @@ void loop() {
   if ((micros() - past_time) >= sysConfig.delta_t) {
     past_time = micros();
 
-    // Only read sensors if they were successfully initialized
+    // Only output data if sensors were successfully initialized
+    // NOTE: Sensor reading now happens in fast control loop (control_interval)
+    // NOTE: ABP2 and ABPD pressure sensors are read asynchronously above
     if (sensorsInitialized) {
-      // ========================================================================
-      // Read SFM3505 O2 flow from Bus 0 (GPIO43/44)
-      // ========================================================================
-      float sfm_air, sfm_o2;
-      if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-        // Store in sensorData structure
-        sensorData_bus0.sfm3505_air_flow = sfm_air;
-        sensorData_bus0.sfm3505_o2_flow = sfm_o2;
-      } else {
-        // SFM3505 read failed - set to 0
-        sensorData_bus0.sfm3505_air_flow = 0.0;
-        sensorData_bus0.sfm3505_o2_flow = 0.0;
-      }
-
-      // Optional: Also read SFM3505 from Bus 1 if present - DISABLED FOR NOW
-      // if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      //   sensorData_bus1.sfm3505_air_flow = sfm_air;
-      //   sensorData_bus1.sfm3505_o2_flow = sfm_o2;
-      // }
-
-      // NOTE: ABP2 pressure is now read asynchronously above (see "ABP2 Pressure Sensor" section)
-      // No need to call sensors_bus0->update() for pressure anymore
-
       // Output data based on quiet mode
       outputData();
     }
@@ -400,6 +460,8 @@ void loop() {
     // ========================================================================
     wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);  // Send SFM3505 Air flow to web
     wifiServer.updatePressure(sensorData_bus0.supply_pressure);  // Uses async ABP2 reading
+    wifiServer.updateLowPressure(sensorData_bus0.abpd_pressure);  // Send ABPD low pressure to web
+    wifiServer.updateTemperature(sensorData_bus0.abpd_temperature);  // Send ABPD temperature to web
     wifiServer.updateValveSignal(actuator.getValveControlSignal());
     wifiServer.updateCurrent(actuatorReader.getValveActuatorCurrent());  // Send actuator current to web
   }
@@ -457,9 +519,13 @@ void loop() {
     renderer.drawControllerMode(ctrlMode);
     wifiServer.updateMode(ctrlMode);
 
-    // Display Bus 0 data (primary) - now showing SFM3505 Air flow
+    // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
     renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air
-    renderer.drawPressure(String(sensorData_bus0.supply_pressure, 2) + " kPa");
+    // Show both supply pressure (ABP2) and low pressure (ABPD) with temperature
+    String pressureStr = "P:" + String(sensorData_bus0.supply_pressure, 1) + " LP:" +
+                         String(sensorData_bus0.abpd_pressure, 1) + " " +
+                         String(sensorData_bus0.abpd_temperature, 0) + "C";
+    renderer.drawPressure(pressureStr);
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
     renderer.drawCurrent(String(actuatorReader.getValveActuatorCurrent(), 3) + " A");
   }

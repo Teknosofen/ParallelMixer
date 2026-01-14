@@ -28,7 +28,12 @@ public:
     void updateValveSignal(float signal);
     void updateCurrent(float current);
     void updateMode(const String& mode);
-    
+    void updateLowPressure(float lowPressure);
+    void updateTemperature(float temperature);
+
+    // High-speed data buffering - call this at your control rate for high-speed web updates
+    void addDataPoint(float flow, float pressure, float signal, float current, float lowPressure, float temperature);
+
     // Configuration
     void setMaxDataPoints(int points) { _maxDataPoints = points; }
     
@@ -43,28 +48,42 @@ private:
     float _currentPressure;
     float _currentValveSignal;
     float _currentCurrent;
+    float _currentLowPressure;
+    float _currentTemperature;
     String _currentMode;
-    
+
     // Data history for graphing
     std::vector<unsigned long> _timestamps;
     std::vector<float> _flowHistory;
     std::vector<float> _pressureHistory;
     std::vector<float> _valveSignalHistory;
     std::vector<float> _currentHistory;
-    
+    std::vector<float> _lowPressureHistory;
+    std::vector<float> _temperatureHistory;
+
+    // High-speed data buffer (for buffering data between client requests)
+    std::vector<unsigned long> _bufferTimestamps;
+    std::vector<float> _bufferFlow;
+    std::vector<float> _bufferPressure;
+    std::vector<float> _bufferValve;
+    std::vector<float> _bufferCurrent;
+    std::vector<float> _bufferLowPressure;
+    std::vector<float> _bufferTemperature;
+
     // Server setup
     void setupWebServer();
     void handleRoot();
     void handleData();
     void handleHistory();
+    void handleDataBuffer();  // New: Handle buffered data requests
     
     // HTML generation
     String generateHtmlPage();
     String generateDataJson();
     String generateHistoryJson();
-    
+    String generateBufferJson();  // New: Generate JSON for buffered data
+
     // Data management
-    void addDataPoint(float flow, float pressure, float signal, float current);
     void trimDataHistory();
 };
 

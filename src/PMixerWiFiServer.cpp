@@ -5,13 +5,16 @@ WebServer server(80);
 PMixerWiFiServer::PMixerWiFiServer(String ssid, String password)
     : _ssid(ssid), _password(password), _running(false), _maxDataPoints(100),
       _currentFlow(0.0f), _currentPressure(0.0f), _currentValveSignal(0.0f),
-      _currentCurrent(0.0f), _currentMode("Initializing")
+      _currentCurrent(0.0f), _currentLowPressure(0.0f), _currentTemperature(0.0f),
+      _currentMode("Initializing")
 {
     _timestamps.reserve(_maxDataPoints);
     _flowHistory.reserve(_maxDataPoints);
     _pressureHistory.reserve(_maxDataPoints);
     _valveSignalHistory.reserve(_maxDataPoints);
     _currentHistory.reserve(_maxDataPoints);
+    _lowPressureHistory.reserve(_maxDataPoints);
+    _temperatureHistory.reserve(_maxDataPoints);
 }
 
 void PMixerWiFiServer::start() {
@@ -59,24 +62,46 @@ void PMixerWiFiServer::updatePressure(float pressure) {
 
 void PMixerWiFiServer::updateValveSignal(float signal) {
     _currentValveSignal = signal;
-    // Add data point when valve signal updates (or choose your trigger)
-    addDataPoint(_currentFlow, _currentPressure, _currentValveSignal, _currentCurrent);
+    // Note: addDataPoint() is now called directly from main loop at control_interval rate
 }
 
 void PMixerWiFiServer::updateCurrent(float current) {
     _currentCurrent = current;
 }
 
+void PMixerWiFiServer::updateLowPressure(float lowPressure) {
+    _currentLowPressure = lowPressure;
+}
+
+void PMixerWiFiServer::updateTemperature(float temperature) {
+    _currentTemperature = temperature;
+}
+
 void PMixerWiFiServer::updateMode(const String& mode) {
     _currentMode = mode;
 }
 
-void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, float current) {
-    _timestamps.push_back(millis());
+void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, float current,
+                                     float lowPressure, float temperature) {
+    unsigned long timestamp = millis();
+
+    // Add to main history
+    _timestamps.push_back(timestamp);
     _flowHistory.push_back(flow);
     _pressureHistory.push_back(pressure);
     _valveSignalHistory.push_back(signal);
     _currentHistory.push_back(current);
+    _lowPressureHistory.push_back(lowPressure);
+    _temperatureHistory.push_back(temperature);
+
+    // Also add to buffer for high-speed web transfer
+    _bufferTimestamps.push_back(timestamp);
+    _bufferFlow.push_back(flow);
+    _bufferPressure.push_back(pressure);
+    _bufferValve.push_back(signal);
+    _bufferCurrent.push_back(current);
+    _bufferLowPressure.push_back(lowPressure);
+    _bufferTemperature.push_back(temperature);
 
     trimDataHistory();
 }
@@ -88,6 +113,8 @@ void PMixerWiFiServer::trimDataHistory() {
         _pressureHistory.erase(_pressureHistory.begin());
         _valveSignalHistory.erase(_valveSignalHistory.begin());
         _currentHistory.erase(_currentHistory.begin());
+        _lowPressureHistory.erase(_lowPressureHistory.begin());
+        _temperatureHistory.erase(_temperatureHistory.begin());
     }
 }
 
@@ -95,6 +122,7 @@ void PMixerWiFiServer::setupWebServer() {
     server.on("/", [this]() { handleRoot(); });
     server.on("/data", [this]() { handleData(); });
     server.on("/history", [this]() { handleHistory(); });
+    server.on("/dataBuffer", [this]() { handleDataBuffer(); });  // New endpoint for buffered data
 }
 
 void PMixerWiFiServer::handleRoot() {
@@ -109,12 +137,18 @@ void PMixerWiFiServer::handleHistory() {
     server.send(200, "application/json", generateHistoryJson());
 }
 
+void PMixerWiFiServer::handleDataBuffer() {
+    server.send(200, "application/json", generateBufferJson());
+}
+
 String PMixerWiFiServer::generateDataJson() {
     String json = "{";
     json += "\"flow\":" + String(_currentFlow, 2) + ",";
     json += "\"pressure\":" + String(_currentPressure, 2) + ",";
     json += "\"valve\":" + String(_currentValveSignal, 2) + ",";
     json += "\"current\":" + String(_currentCurrent, 3) + ",";
+    json += "\"lowPressure\":" + String(_currentLowPressure, 2) + ",";
+    json += "\"temperature\":" + String(_currentTemperature, 1) + ",";
     json += "\"mode\":\"" + _currentMode + "\",";
     json += "\"timestamp\":" + String(millis());
     json += "}";
@@ -148,7 +182,70 @@ String PMixerWiFiServer::generateHistoryJson() {
         if (i > 0) json += ",";
         json += String(_currentHistory[i], 3);
     }
+    json += "],\"lowPressure\":[";
+    for (size_t i = 0; i < _lowPressureHistory.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_lowPressureHistory[i], 2);
+    }
+    json += "],\"temperature\":[";
+    for (size_t i = 0; i < _temperatureHistory.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_temperatureHistory[i], 1);
+    }
     json += "]}";
+    return json;
+}
+
+String PMixerWiFiServer::generateBufferJson() {
+    String json = "{";
+    json += "\"count\":" + String(_bufferTimestamps.size()) + ",";
+    json += "\"mode\":\"" + _currentMode + "\",";
+    json += "\"timestamps\":[";
+    for (size_t i = 0; i < _bufferTimestamps.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferTimestamps[i]);
+    }
+    json += "],\"flow\":[";
+    for (size_t i = 0; i < _bufferFlow.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferFlow[i], 2);
+    }
+    json += "],\"pressure\":[";
+    for (size_t i = 0; i < _bufferPressure.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferPressure[i], 2);
+    }
+    json += "],\"lowPressure\":[";
+    for (size_t i = 0; i < _bufferLowPressure.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferLowPressure[i], 2);
+    }
+    json += "],\"temperature\":[";
+    for (size_t i = 0; i < _bufferTemperature.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferTemperature[i], 1);
+    }
+    json += "],\"valve\":[";
+    for (size_t i = 0; i < _bufferValve.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferValve[i], 2);
+    }
+    json += "],\"current\":[";
+    for (size_t i = 0; i < _bufferCurrent.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferCurrent[i], 3);
+    }
+    json += "]}";
+
+    // Clear the buffer after sending
+    _bufferTimestamps.clear();
+    _bufferFlow.clear();
+    _bufferPressure.clear();
+    _bufferLowPressure.clear();
+    _bufferTemperature.clear();
+    _bufferValve.clear();
+    _bufferCurrent.clear();
+
     return json;
 }
 
@@ -268,6 +365,14 @@ String PMixerWiFiServer::generateHtmlPage() {
                 <div class="status-value" id="pressureValue">--</div>
             </div>
             <div class="status-card">
+                <div class="status-label">Low Pressure</div>
+                <div class="status-value" id="lowPressureValue">--</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Temperature</div>
+                <div class="status-value" id="temperatureValue">--</div>
+            </div>
+            <div class="status-card">
                 <div class="status-label">Valve Control Signal</div>
                 <div class="status-value" id="valveValue">--</div>
             </div>
@@ -294,7 +399,9 @@ String PMixerWiFiServer::generateHtmlPage() {
             flow: [],
             pressure: [],
             valve: [],
-            current: []
+            current: [],
+            lowPressure: [],
+            temperature: []
         };
 
         // Chart setup
@@ -309,28 +416,54 @@ String PMixerWiFiServer::generateHtmlPage() {
                         data: [],
                         borderColor: '#0078D7',
                         backgroundColor: 'rgba(0, 120, 215, 0.1)',
-                        tension: 0.3
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
                     },
                     {
                         label: 'Pressure',
                         data: [],
                         borderColor: '#FF6B6B',
                         backgroundColor: 'rgba(255, 107, 107, 0.1)',
-                        tension: 0.3
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'Low Pressure',
+                        data: [],
+                        borderColor: '#FF69B4',
+                        backgroundColor: 'rgba(255, 105, 180, 0.1)',
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    },
+                    {
+                        label: 'Temperature',
+                        data: [],
+                        borderColor: '#9370DB',
+                        backgroundColor: 'rgba(147, 112, 219, 0.1)',
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
                     },
                     {
                         label: 'Valve Signal',
                         data: [],
                         borderColor: '#4ECDC4',
                         backgroundColor: 'rgba(78, 205, 196, 0.1)',
-                        tension: 0.3
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
                     },
                     {
                         label: 'Current',
                         data: [],
                         borderColor: '#FFA500',
                         backgroundColor: 'rgba(255, 165, 0, 0.1)',
-                        tension: 0.3
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2
                     }
                 ]
             },
@@ -369,42 +502,62 @@ String PMixerWiFiServer::generateHtmlPage() {
             }
         });
 
-        // Fetch current data
+        // Fetch buffered data (batch of multiple samples for high-speed updates)
         async function fetchData() {
             try {
-                const response = await fetch('/data');
+                const response = await fetch('/dataBuffer');
                 const data = await response.json();
-                
-                // Update display values
-                document.getElementById('flowValue').textContent = data.flow.toFixed(2);
-                document.getElementById('pressureValue').textContent = data.pressure.toFixed(2);
-                document.getElementById('valveValue').textContent = data.valve.toFixed(2);
-                document.getElementById('currentValue').textContent = data.current.toFixed(3) + ' A';
+
+                // Update mode display
                 document.getElementById('modeDisplay').textContent = 'Mode: ' + data.mode;
 
-                // Store data
-                const timeInSeconds = (data.timestamp / 1000).toFixed(1);
-                dataHistory.timestamps.push(data.timestamp);
-                dataHistory.flow.push(data.flow);
-                dataHistory.pressure.push(data.pressure);
-                dataHistory.valve.push(data.valve);
-                dataHistory.current.push(data.current);
+                // If no new data points, skip processing
+                if (data.count === 0) {
+                    return;
+                }
 
-                // Update chart
-                chart.data.labels.push(timeInSeconds);
-                chart.data.datasets[0].data.push(data.flow);
-                chart.data.datasets[1].data.push(data.pressure);
-                chart.data.datasets[2].data.push(data.valve);
-                chart.data.datasets[3].data.push(data.current);
-                
-                // Keep only configured number of points on graph
                 const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
-                if (chart.data.labels.length > maxPoints) {
+
+                // Process all buffered data points
+                for (let i = 0; i < data.count; i++) {
+                    // Update display values (show latest values only)
+                    if (i === data.count - 1) {
+                        document.getElementById('flowValue').textContent = data.flow[i].toFixed(2);
+                        document.getElementById('pressureValue').textContent = data.pressure[i].toFixed(2);
+                        document.getElementById('lowPressureValue').textContent = data.lowPressure[i].toFixed(2);
+                        document.getElementById('temperatureValue').textContent = data.temperature[i].toFixed(1) + ' °C';
+                        document.getElementById('valveValue').textContent = data.valve[i].toFixed(2);
+                        document.getElementById('currentValue').textContent = data.current[i].toFixed(3) + ' A';
+                    }
+
+                    // Store all data points to history
+                    const timeInSeconds = (data.timestamps[i] / 1000).toFixed(1);
+                    dataHistory.timestamps.push(data.timestamps[i]);
+                    dataHistory.flow.push(data.flow[i]);
+                    dataHistory.pressure.push(data.pressure[i]);
+                    dataHistory.valve.push(data.valve[i]);
+                    dataHistory.current.push(data.current[i]);
+                    dataHistory.lowPressure.push(data.lowPressure[i]);
+                    dataHistory.temperature.push(data.temperature[i]);
+
+                    // Add all points to chart
+                    chart.data.labels.push(timeInSeconds);
+                    chart.data.datasets[0].data.push(data.flow[i]);
+                    chart.data.datasets[1].data.push(data.pressure[i]);
+                    chart.data.datasets[2].data.push(data.lowPressure[i]);
+                    chart.data.datasets[3].data.push(data.temperature[i]);
+                    chart.data.datasets[4].data.push(data.valve[i]);
+                    chart.data.datasets[5].data.push(data.current[i]);
+                }
+
+                // Trim chart to max points
+                while (chart.data.labels.length > maxPoints) {
                     chart.data.labels.shift();
                     chart.data.datasets.forEach(dataset => dataset.data.shift());
                 }
-                
-                chart.update('none'); // Update without animation for smoother real-time
+
+                // Update chart once with all new data (batch update)
+                chart.update('none'); // No animation for smoother high-speed updates
             } catch (error) {
                 console.error('Error fetching data:', error);
             }
@@ -421,6 +574,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                 dataHistory.pressure = history.pressure;
                 dataHistory.valve = history.valve;
                 dataHistory.current = history.current;
+                dataHistory.lowPressure = history.lowPressure;
+                dataHistory.temperature = history.temperature;
 
                 // Populate chart with configured number of points
                 const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
@@ -430,8 +585,10 @@ String PMixerWiFiServer::generateHtmlPage() {
                     chart.data.labels.push(timeInSeconds);
                     chart.data.datasets[0].data.push(history.flow[i]);
                     chart.data.datasets[1].data.push(history.pressure[i]);
-                    chart.data.datasets[2].data.push(history.valve[i]);
-                    chart.data.datasets[3].data.push(history.current[i]);
+                    chart.data.datasets[2].data.push(history.lowPressure[i]);
+                    chart.data.datasets[3].data.push(history.temperature[i]);
+                    chart.data.datasets[4].data.push(history.valve[i]);
+                    chart.data.datasets[5].data.push(history.current[i]);
                 }
                 chart.update();
             } catch (error) {
@@ -446,12 +603,14 @@ String PMixerWiFiServer::generateHtmlPage() {
                 return;
             }
 
-            let csv = 'Timestamp (ms)\tFlow\tPressure\tValve Signal\tCurrent (A)\n';
+            let csv = 'Timestamp (ms)\tFlow\tPressure\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\n';
 
             for (let i = 0; i < dataHistory.timestamps.length; i++) {
                 csv += dataHistory.timestamps[i] + '\t';
                 csv += dataHistory.flow[i].toFixed(2) + '\t';
                 csv += dataHistory.pressure[i].toFixed(2) + '\t';
+                csv += dataHistory.lowPressure[i].toFixed(2) + '\t';
+                csv += dataHistory.temperature[i].toFixed(1) + '\t';
                 csv += dataHistory.valve[i].toFixed(2) + '\t';
                 csv += dataHistory.current[i].toFixed(3) + '\n';
             }
@@ -491,9 +650,10 @@ String PMixerWiFiServer::generateHtmlPage() {
 
         // Initialize
         loadHistory();
-        
-        // Update every 50ms
-        setInterval(fetchData, 50);
+
+        // Fetch buffered data every 200ms (allows accumulation of ~10 samples at 50Hz)
+        // You can adjust this interval: lower = less latency but more WiFi traffic
+        setInterval(fetchData, 200);
     </script>
 </body>
 </html>

@@ -11,6 +11,7 @@
 #define I2Cadr_SSC 0x58  // Supply pressure sensor (legacy, disabled)
 #define I2Cadr_SFM3505 0x2E  // SFM3505 flow sensor (ACTIVE)
 #define I2Cadr_ABP2 0x28  // ABP2DSNT150PG2A3XX Honeywell pressure sensor (ACTIVE)
+#define I2Cadr_ABPD 0x18  // ABPDLNN100MG2A3 Honeywell low pressure sensor (ACTIVE)
 
 // Sensor commands (legacy sensors)
 #define SFM_com0 0x20  // SW reset
@@ -35,6 +36,10 @@ struct SensorData {
   // SFM3505 flow sensor data (ACTIVE)
   float sfm3505_air_flow;       // SFM3505 air flow in slm
   float sfm3505_o2_flow;        // SFM3505 O2 flow in slm
+
+  // ABPDLNN100MG2A3 low pressure sensor data (ACTIVE)
+  float abpd_pressure;          // ABPD low pressure in kPa
+  float abpd_temperature;       // ABPD temperature in °C
 };
 
 struct SensorDataRaw {
@@ -76,11 +81,25 @@ public:
   bool readABP2Pressure(float& pressure_kpa, uint8_t& status_byte);  // Read 7 bytes (no delays!)
   bool isABP2Busy();                     // Check busy flag without full read
 
+  // ABPDLNN100MG2A3 low pressure sensor methods - synchronous measurement
+  // Returns pressure in kPa (100 mbar range) and temperature in °C
+  bool readABPDPressureTemp(float& pressure_kpa, float& temperature_c, uint8_t& status_byte);
+
   const char* getName() const { return _name; }
+
+  // Sensor detection status - check these before reading
+  bool hasSFM3505() const { return _hasSFM3505; }
+  bool hasABP2() const { return _hasABP2; }
+  bool hasABPD() const { return _hasABPD; }
 
 private:
   TwoWire* _wire;              // Pointer to I2C bus (Wire or Wire1)
   const char* _name;           // For debugging
+
+  // Sensor detection flags
+  bool _hasSFM3505;
+  bool _hasABP2;
+  bool _hasABPD;
   
   // Legacy sensor reading methods
   float readDifferentialPressure();
