@@ -492,8 +492,8 @@ String PMixerWiFiServer::generateHtmlPage() {
         // Initialize
         loadHistory();
         
-        // Update every 500ms
-        setInterval(fetchData, 500);
+        // Update every 50ms
+        setInterval(fetchData, 50);
     </script>
 </body>
 </html>
