@@ -2,8 +2,8 @@
 
 SerialActuatorReader::SerialActuatorReader(HardwareSerial* serial)
   : _serial(serial),
-    _valveActuatorCurrent(0.0),
-    _valveActuatorMisc(0.0),
+    _valveActuatorCurrent(-9.9),
+    _valveActuatorMisc(-9.9),
     _valveActuatorMiscCmd('\0'),
     _currentTimestamp(0),
     _miscTimestamp(0) {
@@ -12,8 +12,8 @@ SerialActuatorReader::SerialActuatorReader(HardwareSerial* serial)
 
 void SerialActuatorReader::begin() {
   _receiveBuffer = "";
-  _valveActuatorCurrent = 0.0;
-  _valveActuatorMisc = 0.0;
+  _valveActuatorCurrent = -9.9;
+  _valveActuatorMisc = -9.9;
   _valveActuatorMiscCmd = '\0';
   _currentTimestamp = 0;
   _miscTimestamp = 0;

@@ -42,8 +42,10 @@ bool SensorReader::initialize() {
   }
 
   // ============================================================================
-  // Detect ABP2 Pressure Sensor
+  // Detect Pressure Sensor (compile-time selection due to address conflict)
   // ============================================================================
+#ifdef USE_ABP2_PRESSURE_SENSOR
+  // Using ABP2 high pressure sensor
   Serial.printf("[%s] Checking for ABP2 at address 0x%02X...\n", _name, I2Cadr_ABP2);
   _wire->beginTransmission(I2Cadr_ABP2);
   byte abp2_error = _wire->endTransmission();
@@ -54,10 +56,10 @@ bool SensorReader::initialize() {
   } else {
     Serial.printf("[%s] ⚠️ ABP2 not detected at 0x%02X\n", _name);
   }
+  _hasABPD = false;  // ABPD disabled by compile switch
 
-  // ============================================================================
-  // Detect ABPD Low Pressure Sensor
-  // ============================================================================
+#elif defined(USE_ABPD_PRESSURE_SENSOR)
+  // Using ABPD low pressure sensor
   Serial.printf("[%s] Checking for ABPD at address 0x%02X...\n", _name, I2Cadr_ABPD);
   _wire->beginTransmission(I2Cadr_ABPD);
   byte abpd_error = _wire->endTransmission();
@@ -68,6 +70,11 @@ bool SensorReader::initialize() {
   } else {
     Serial.printf("[%s] ⚠️ ABPD not detected at 0x%02X\n", _name);
   }
+  _hasABP2 = false;  // ABP2 disabled by compile switch
+
+#else
+  #error "Please define either USE_ABP2_PRESSURE_SENSOR or USE_ABPD_PRESSURE_SENSOR in SensorReader.hpp"
+#endif
 
   // ============================================================================
   // Summary

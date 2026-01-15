@@ -138,7 +138,7 @@ void ImageRenderer::drawWiFiField() {
     tft.setFreeFont(FSS9);   
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(wiFiRectPos.x, wiFiRectPos.y, 145, 70, 10, TFT_WHITE); // White border around the screen
+    tft.drawRoundRect(wiFiRectPos.x, wiFiRectPos.y, 130, 70, 10, TFT_WHITE); // White border around the screen
     tft.drawString("WiFi  ", wiFiLabelPos.x, wiFiLabelPos.y); // Print a message on the display  
 }
 
@@ -146,7 +146,7 @@ void ImageRenderer::drawStatusField() {
     tft.setFreeFont(FSS9);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 120, 10, TFT_WHITE); // White border (increased height for current)
+    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 175, 120, 10, TFT_WHITE); // White border (increased height for current)
     tft.drawString("Status  ", statusLabelPos.x, statusLabelPos.y); // Print a message on the display
 }
 
@@ -196,11 +196,11 @@ void ImageRenderer::drawPressure(const String& pressure) {
     // Clear previous text by drawing background rectangle
     tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
     tft.setFreeFont(FSS9);  
-    tft.drawString("Pressure: " + oldPressure, statusPressurePos.x, statusPressurePos.y, 2);
+    tft.drawString(oldPressure, statusPressurePos.x, statusPressurePos.y, 2);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
     // Draw the pressure string
-    tft.drawString("Pressure: " + pressure, statusPressurePos.x, statusPressurePos.y, 2);
+    tft.drawString(pressure, statusPressurePos.x, statusPressurePos.y, 2);
     oldPressure = pressure;
 }
 
@@ -252,7 +252,7 @@ void ImageRenderer::initPositions() {
     wiFiPromptPos.x = wiFiLabelPos.x;
     wiFiPromptPos.y = wiFiLabelPos.y + 20 + 20 + 20;
 
-    statusRectPos.x = 160;
+    statusRectPos.x = 140;
     statusRectPos.y = 50;
 
     statusLabelPos.x = statusRectPos.x + 5;

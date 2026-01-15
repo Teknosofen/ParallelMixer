@@ -80,23 +80,71 @@ SensorReader sensors_bus0(&Wire, "Bus0");
 void setup() {
   Serial.begin(115200);
   Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, 500000);
-  sensors_bus0.initialize();  // Auto-starts SFM3505
+
+  // Initialize sensors - detects which sensors are present
+  bool sensorsFound = sensors_bus0.initialize();  // Auto-starts SFM3505 if detected
+
+  if (!sensorsFound) {
+    Serial.println("⚠️ No sensors detected!");
+  }
 }
 
 void loop() {
-  // Read legacy sensors
-  SensorData data;
-  sensors_bus0.update(data);
-  
-  // Read SFM3505
-  float airFlow, o2Flow;
-  if (sensors_bus0.readSFM3505AllFlows(airFlow, o2Flow)) {
-    Serial.printf("Air: %.2f slm, O2: %.2f slm\n", airFlow, o2Flow);
+  // Check if SFM3505 was detected during initialization
+  if (sensors_bus0.hasSFM3505()) {
+    // Read SFM3505
+    float airFlow, o2Flow;
+    if (sensors_bus0.readSFM3505AllFlows(airFlow, o2Flow)) {
+      Serial.printf("Air: %.2f slm, O2: %.2f slm\n", airFlow, o2Flow);
+    } else {
+      // Read failed - values will be -9.9
+      Serial.println("SFM3505 read failed");
+    }
+  } else {
+    // Sensor not detected - default value is -9.9
+    Serial.println("SFM3505 not available (value = -9.9)");
   }
-  
+
   delay(100);
 }
 ```
+
+### Sensor Detection Methods
+
+The SensorReader class provides methods to check which sensors are present:
+
+```cpp
+bool hasSFM3505() const;  // Check if SFM3505 flow sensor detected
+bool hasABP2() const;     // Check if ABP2 pressure sensor detected
+bool hasABPD() const;     // Check if ABPD low pressure sensor detected
+```
+
+### Default Values
+
+All sensor readings default to **-9.9** when:
+- Sensor not detected during initialization
+- Sensor read fails
+- Sensor disabled by compile switch
+
+This makes it easy to identify invalid data:
+```cpp
+if (flow == -9.9) {
+  Serial.println("No valid flow data");
+}
+```
+
+### Pressure Sensor Compile Switch
+
+Due to I2C address conflict (both ABP2 and ABPD use 0x28), you must select one sensor at compile time until an I2C multiplexer is added.
+
+In **SensorReader.hpp** (lines 12-13):
+```cpp
+// Uncomment ONE of the following:
+#define USE_ABP2_PRESSURE_SENSOR    // High pressure (default)
+// #define USE_ABPD_PRESSURE_SENSOR    // Low pressure
+```
+
+See [PRESSURE_SENSOR_CONFIG.md](../PRESSURE_SENSOR_CONFIG.md) for complete details.
 
 ## 🔧 How It Works
 

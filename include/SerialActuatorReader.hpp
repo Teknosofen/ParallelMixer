@@ -48,13 +48,13 @@ public:
 
   /**
    * @brief Get valve actuator current (command 'I')
-   * @return Current in Amperes, or 0.0 if no data received yet
+   * @return Current in Amperes, or -9.9 if no data received yet
    */
   float getValveActuatorCurrent() const;
 
   /**
    * @brief Get valve actuator misc data (any command except 'I')
-   * @return Last received misc value, or 0.0 if no data received yet
+   * @return Last received misc value, or -9.9 if no data received yet
    */
   float getValveActuatorMisc() const;
 

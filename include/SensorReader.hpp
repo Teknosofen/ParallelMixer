@@ -5,13 +5,22 @@
 #include "Wire.h"
 #include "PinConfig.h"
 
+// ============================================================================
+// PRESSURE SENSOR SELECTION (both sensors use 0x28 without I2C mux)
+// ============================================================================
+// Uncomment ONE of the following lines to select which pressure sensor to use:
+#define USE_ABP2_PRESSURE_SENSOR    // High pressure sensor (ABP2DSNT150PG2A3XX)
+// #define USE_ABPD_PRESSURE_SENSOR    // Low pressure sensor (ABPDLNN100MG2A3)
+
 // Sensor I2C addresses
 #define I2Cadr_SFM 0x40  // Flow meter (legacy, disabled)
 #define I2Cadr_SPD 0x25  // Differential pressure sensor (legacy, disabled)
 #define I2Cadr_SSC 0x58  // Supply pressure sensor (legacy, disabled)
 #define I2Cadr_SFM3505 0x2E  // SFM3505 flow sensor (ACTIVE)
-#define I2Cadr_ABP2 0x28  // ABP2DSNT150PG2A3XX Honeywell pressure sensor (ACTIVE)
-#define I2Cadr_ABPD 0x18  // ABPDLNN100MG2A3 Honeywell low pressure sensor (ACTIVE)
+
+// Pressure sensor addresses (CONFLICT: both use 0x28 until I2C mux is added)
+#define I2Cadr_ABP2 0x28  // ABP2DSNT150PG2A3XX Honeywell high pressure sensor
+#define I2Cadr_ABPD 0x28  // ABPDLNN100MG2A3 Honeywell low pressure sensor (same address!)
 
 // Sensor commands (legacy sensors)
 #define SFM_com0 0x20  // SW reset
@@ -29,17 +38,17 @@
 
 struct SensorData {
   // Legacy/existing sensors (disabled)
-  float differential_pressure;  // SPD pressure in mBar (disabled)
-  float flow;                   // Legacy SFM flow in L/min from 0x40 (disabled)
-  float supply_pressure;        // ABP2 pressure in kPa (ACTIVE)
+  float differential_pressure = -9.9;  // SPD pressure in mBar (disabled)
+  float flow = -9.9;                   // Legacy SFM flow in L/min from 0x40 (disabled)
+  float supply_pressure = -9.9;        // ABP2 pressure in kPa (ACTIVE)
 
   // SFM3505 flow sensor data (ACTIVE)
-  float sfm3505_air_flow;       // SFM3505 air flow in slm
-  float sfm3505_o2_flow;        // SFM3505 O2 flow in slm
+  float sfm3505_air_flow = -9.9;       // SFM3505 air flow in slm
+  float sfm3505_o2_flow = -9.9;        // SFM3505 O2 flow in slm
 
   // ABPDLNN100MG2A3 low pressure sensor data (ACTIVE)
-  float abpd_pressure;          // ABPD low pressure in kPa
-  float abpd_temperature;       // ABPD temperature in °C
+  float abpd_pressure = -9.9;          // ABPD low pressure in kPa
+  float abpd_temperature = -9.9;       // ABPD temperature in °C
 };
 
 struct SensorDataRaw {

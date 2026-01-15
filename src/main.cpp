@@ -319,7 +319,7 @@ void setup() {
   // ============================================================================
   // Initialize systems
   // ============================================================================
-  wifiServer.start();
+  // WiFi starts disabled - use long key press to enable
   actuator.initialize();
 
   // Link actuator to serial reader for communication
@@ -344,7 +344,7 @@ void loop() {
     renderer.drawStatusField();
     renderer.drawWiFiField();
     renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID        ");
-    renderer.drawWiFiPromt("Press key to enable ");
+    renderer.drawWiFiPromt("Long press: enable");
   }
 
   // ============================================================================
@@ -372,8 +372,8 @@ void loop() {
       pressureCommandSent = false;  // Next cycle will send command again
     }
   } else if (!sensors_bus0->hasABP2()) {
-    // No ABP2 detected - set to zero
-    sensorData_bus0.supply_pressure = 0.0;
+    // No ABP2 detected - set to invalid indicator
+    sensorData_bus0.supply_pressure = -9.9;
   }
 
   // ============================================================================
@@ -392,13 +392,13 @@ void loop() {
         sensorData_bus0.sfm3505_air_flow = sfm_air;
         sensorData_bus0.sfm3505_o2_flow = sfm_o2;
       } else {
-        sensorData_bus0.sfm3505_air_flow = 0.0;
-        sensorData_bus0.sfm3505_o2_flow = 0.0;
+        sensorData_bus0.sfm3505_air_flow = -9.9;
+        sensorData_bus0.sfm3505_o2_flow = -9.9;
       }
     } else if (!sensors_bus0->hasSFM3505()) {
-      // No SFM3505 detected - set to zero
-      sensorData_bus0.sfm3505_air_flow = 0.0;
-      sensorData_bus0.sfm3505_o2_flow = 0.0;
+      // No SFM3505 detected - set to invalid indicator
+      sensorData_bus0.sfm3505_air_flow = -9.9;
+      sensorData_bus0.sfm3505_o2_flow = -9.9;
     }
 
     // ========================================================================
@@ -414,13 +414,13 @@ void loop() {
         sensorData_bus0.abpd_pressure = abpd_pressure;
         sensorData_bus0.abpd_temperature = abpd_temp;
       } else {
-        sensorData_bus0.abpd_pressure = 0.0;
-        sensorData_bus0.abpd_temperature = 0.0;
+        sensorData_bus0.abpd_pressure = -9.9;
+        sensorData_bus0.abpd_temperature = -9.9;
       }
     } else if (!sensors_bus0->hasABPD()) {
-      // No ABPD detected - set to zero
-      sensorData_bus0.abpd_pressure = 0.0;
-      sensorData_bus0.abpd_temperature = 0.0;
+      // No ABPD detected - set to invalid indicator
+      sensorData_bus0.abpd_pressure = -9.9;
+      sensorData_bus0.abpd_temperature = -9.9;
     }
 
     // ========================================================================
@@ -522,9 +522,9 @@ void loop() {
     // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
     renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air
     // Show both supply pressure (ABP2) and low pressure (ABPD) with temperature
-    String pressureStr = "P:" + String(sensorData_bus0.supply_pressure, 1) + " LP:" +
+    String pressureStr = "HP: " + String(sensorData_bus0.supply_pressure, 1) + " LP: " +
                          String(sensorData_bus0.abpd_pressure, 1) + " " +
-                         String(sensorData_bus0.abpd_temperature, 0) + "C";
+                         String(sensorData_bus0.abpd_temperature, 1) + " C";
     renderer.drawPressure(pressureStr);
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
     renderer.drawCurrent(String(actuatorReader.getValveActuatorCurrent(), 3) + " A");
@@ -536,16 +536,16 @@ void loop() {
   
   if (interactionKey1.wasReleased()) {
     if (interactionKey1.wasLongPress()) {
-      hostCom.println("Key1 long press (>1s)");
+      hostCom.println("Key1 long press (>1s) - Enabling WiFi");
       wifiServer.start();
       renderer.drawWiFiAPIP(wifiServer.getApIpAddress(), PMIXERSSID);
-      renderer.drawWiFiPromt("Press key to disable");
+      renderer.drawWiFiPromt("Short press: disable");
     } else {
-      hostCom.println("interactionKey1 short press");
+      hostCom.println("Key1 short press - Disabling WiFi");
       wifiServer.stop();
       hostCom.println("WiFi Access Point stopped");
-      renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID        ");
-      renderer.drawWiFiPromt("Press key to enable");
+      renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID      ");
+      renderer.drawWiFiPromt("Long press: enable ");
     }
   }
   

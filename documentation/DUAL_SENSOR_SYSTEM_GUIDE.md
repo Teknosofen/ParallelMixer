@@ -1,5 +1,9 @@
 # Complete Sensor System - Legacy + SFM3505
 
+> ⚠️ **NOTE**: This guide describes a dual-sensor system that is no longer actively used. Legacy sensors are now disabled in the current implementation. For the current system architecture, see [CURRENT_ARCHITECTURE.md](../CURRENT_ARCHITECTURE.md).
+>
+> This document is kept for historical reference and for users who may want to re-enable legacy sensors.
+
 ## Overview
 The SensorReader class now supports **BOTH** the original legacy sensors **AND** the new SFM3505 sensor simultaneously. You can use them together or separately as needed.
 

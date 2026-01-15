@@ -1,5 +1,9 @@
 # Migration Guide: Dual I2C + Dual Serial for T-Display S3
 
+> ⚠️ **NOTE**: This guide describes a migration that has been completed. For the current system architecture, see [CURRENT_ARCHITECTURE.md](../CURRENT_ARCHITECTURE.md).
+>
+> This document is kept for historical reference.
+
 ## Overview
 This guide shows how to migrate your existing P-Mixer code to support:
 - ✅ Two independent I2C buses for sensors with same addresses
