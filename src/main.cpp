@@ -273,8 +273,9 @@ void setup() {
       else if (address == 0x76) hostCom.print(" - BME280");
 
       // ABPDLNN100MG2A3 has address 0x18
-      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)");
-
+      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)"); // wrong address
+      else hostCom.print(" - unknown device");
+      
       hostCom.println();
       deviceCount++;
     }
@@ -343,7 +344,7 @@ void loop() {
     renderer.drawLabel();
     renderer.drawStatusField();
     renderer.drawWiFiField();
-    renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID        ");
+    renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
     renderer.drawWiFiPromt("Long press: enable");
   }
 
@@ -544,7 +545,7 @@ void loop() {
       hostCom.println("Key1 short press - Disabling WiFi");
       wifiServer.stop();
       hostCom.println("WiFi Access Point stopped");
-      renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID      ");
+      renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
       renderer.drawWiFiPromt("Long press: enable ");
     }
   }
