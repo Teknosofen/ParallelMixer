@@ -10,6 +10,8 @@ ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
     _period_start_time_us(0),
     _valve_signal_externally_set(0.0),
     _valve_signal_generated(0.0),
+    _sweep_start_time_us(0),
+    _sweep_phase(0.0),
     _serialActuatorReader(nullptr) {
 
   // Default PID configuration
@@ -23,6 +25,12 @@ ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
   _sig_gen_config.amplitude = 10.0;   // 10.0%
   _sig_gen_config.period_seconds = 1.0; // 1 second period
 
+  // Default sweep configuration
+  _sweep_config.start_freq = 0.1;     // 0.1 Hz
+  _sweep_config.stop_freq = 10.0;     // 10 Hz
+  _sweep_config.sweep_time = 10.0;    // 10 seconds
+  _sweep_config.logarithmic = false;  // Linear sweep by default
+
   // Reset control state
   resetPIDState();
 }
@@ -35,6 +43,8 @@ void ActuatorControl::setControllerMode(ControllerMode mode) {
   _controller_mode = mode;
   _index_in_period = 0;  // Reset period counter on mode change
   _period_start_time_us = 0;  // Reset period timer
+  _sweep_start_time_us = 0;   // Reset sweep timer
+  _sweep_phase = 0.0;         // Reset sweep phase
 }
 
 ControllerMode ActuatorControl::getControllerMode() const {
@@ -91,6 +101,16 @@ SignalGeneratorConfig ActuatorControl::getSignalGeneratorConfig() const {
   return _sig_gen_config;
 }
 
+void ActuatorControl::setSweepConfig(const SweepConfig& config) {
+  _sweep_config = config;
+  _sweep_start_time_us = 0;  // Reset sweep timer on config change
+  _sweep_phase = 0.0;        // Reset sweep phase
+}
+
+SweepConfig ActuatorControl::getSweepConfig() const {
+  return _sweep_config;
+}
+
 float ActuatorControl::updateSignalGenerator() {
   // Initialize period start time if not set
   if (_period_start_time_us == 0) {
@@ -130,6 +150,13 @@ float ActuatorControl::updateSignalGenerator() {
   _valve_signal_generated = signal;
   outputToValve(signal);
 
+  return signal;
+}
+
+float ActuatorControl::updateSweepGenerator() {
+  float signal = generateSweep();
+  _valve_signal_generated = signal;
+  outputToValve(signal);
   return signal;
 }
 
@@ -186,6 +213,71 @@ float ActuatorControl::generateTriangle(float phase) {
   if (signal_percent > 100.0) signal_percent = 100.0;
 
   return signal_percent;
+}
+
+float ActuatorControl::generateSweep() {
+  // Initialize sweep start time if not set
+  if (_sweep_start_time_us == 0) {
+    _sweep_start_time_us = micros();
+    _sweep_phase = 0.0;
+  }
+
+  // Calculate elapsed time in sweep
+  uint32_t current_time_us = micros();
+  uint32_t elapsed_us = current_time_us - _sweep_start_time_us;
+  float elapsed_seconds = (float)elapsed_us / 1000000.0;
+  uint32_t sweep_duration_us = (uint32_t)(_sweep_config.sweep_time * 1000000.0);
+
+  // Reset sweep if it has completed
+  if (elapsed_us >= sweep_duration_us) {
+    _sweep_start_time_us = micros();
+    _sweep_phase = 0.0;
+    elapsed_seconds = 0.0;
+  }
+
+  // Calculate normalized position in sweep (0.0 to 1.0)
+  float sweep_position = elapsed_seconds / _sweep_config.sweep_time;
+
+  // Calculate instantaneous frequency based on sweep type
+  float current_freq;
+  if (_sweep_config.logarithmic) {
+    // Logarithmic sweep: frequency increases exponentially
+    // f(t) = f_start * (f_stop/f_start)^(t/T)
+    float ratio = _sweep_config.stop_freq / _sweep_config.start_freq;
+    current_freq = _sweep_config.start_freq * pow(ratio, sweep_position);
+  } else {
+    // Linear sweep: frequency increases linearly
+    // f(t) = f_start + (f_stop - f_start) * (t/T)
+    current_freq = _sweep_config.start_freq +
+                   (_sweep_config.stop_freq - _sweep_config.start_freq) * sweep_position;
+  }
+
+  // Calculate time since last call (approximate using control interval)
+  // We accumulate phase to maintain continuous sine wave
+  static uint32_t last_time_us = 0;
+  uint32_t dt_us = (last_time_us == 0) ? 10000 : (current_time_us - last_time_us);
+  last_time_us = current_time_us;
+  float dt_seconds = (float)dt_us / 1000000.0;
+
+  // Accumulate phase: delta_phase = frequency * dt
+  _sweep_phase += current_freq * dt_seconds;
+
+  // Keep phase in 0.0 to 1.0 range
+  while (_sweep_phase >= 1.0) {
+    _sweep_phase -= 1.0;
+  }
+
+  // Generate sine wave at current phase using existing offset/amplitude
+  // Use same formula as generateSine()
+  float signal_percent = _sig_gen_config.amplitude / 2.0 *
+                         (1.0 + sin(6.28318530718 * _sweep_phase));  // 2*PI*phase
+  float total_percent = signal_percent + _sig_gen_config.offset;
+
+  // Clamp to valid percentage range
+  if (total_percent < 0.0) total_percent = 0.0;
+  if (total_percent > 100.0) total_percent = 100.0;
+
+  return total_percent;
 }
 
 void ActuatorControl::setValveControlSignal(float percent) {
@@ -271,6 +363,11 @@ void ActuatorControl::execute(float flow_reference, float flow_measured, int qui
 
     case TRIANGLE_CONTROL:
       updateSignalGenerator();
+      // Note: quiet_mode == 3 output is now handled in outputData() function
+      break;
+
+    case SWEEP_CONTROL:
+      updateSweepGenerator();
       // Note: quiet_mode == 3 output is now handled in outputData() function
       break;
   }

@@ -20,7 +20,9 @@
 #define I2C0_PULLUP_CTRL_PIN 21  // Set HIGH to enable pull-ups, LOW to disable
 
 // I2C Bus 0 Clock Frequency
-#define I2C0_CLOCK_FREQ 2000000  // 2MHz for better reliability
+// Note: ESP32-S3 I2C hardware maxes out around 800kHz-1MHz
+// Requesting 2MHz results in ~660kHz actual (hardware clamped)
+#define I2C0_CLOCK_FREQ 1000000  // Request 1MHz (actual ~660-800kHz due to ESP32 limits)
 
 // I2C Bus 1 (Wire1) - Second sensor group (Flow + Pressure sensors #2)
 #define I2C1_SDA_PIN 10

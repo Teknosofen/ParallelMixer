@@ -19,15 +19,20 @@
 
 ### Hardware
 - **MCU**: ESP32-S3 @ 240MHz
-- **I2C Bus**: GPIO43/44 @ 400kHz (configurable to 500kHz)
+- **I2C Bus**: GPIO43/44 @ ~660kHz (ESP32 hardware limited)
 - **Display**: 170x320 TFT LCD (ST7789)
 - **Serial**: Serial1 @ 115200 baud (actuator communication)
 - **RTOS**: FreeRTOS
 
+### I2C Clock Note
+The ESP32-S3 I2C hardware has a maximum practical limit of ~800kHz-1MHz.
+Requesting higher values (e.g., 2MHz) results in the hardware clamping to its maximum.
+**Measured actual speed: ~660kHz** (verified by oscilloscope).
+
 ### Current Control Rates
 - **Default**: 100Hz (10ms interval, `X10000` command)
 - **Target**: 2kHz (0.5ms interval, `X500` command)
-- **Maximum safe**: 2.5-3.3kHz (depending on I2C speed)
+- **Maximum safe**: 3-4kHz (with 660kHz I2C)
 
 ### Output Loop (Separate, Non-Interfering)
 - **Rate**: 10Hz (100ms interval, `T100000` command)
@@ -38,7 +43,29 @@
 
 ## I2C Timing Fundamentals
 
-### Protocol Overhead at 400kHz
+### ESP32-S3 I2C Hardware Limits
+
+| Mode | Spec Frequency | ESP32-S3 Practical Max |
+|------|----------------|------------------------|
+| Standard Mode | 100 kHz | 100 kHz |
+| Fast Mode | 400 kHz | 400 kHz |
+| Fast Mode Plus | 1 MHz | ~660-800 kHz |
+
+**Important**: The ESP32-S3 I2C peripheral cannot achieve true 1MHz+ speeds.
+When requesting 1-2MHz, the actual clock is clamped to ~660-800kHz.
+
+### Protocol Overhead at 660kHz (Actual Measured)
+
+| Element | Time |
+|---------|------|
+| Bit time | 1.52µs |
+| Byte time (8 bits + ACK) | 13.6µs |
+| START condition | ~3µs |
+| STOP condition | ~3µs |
+| Address write (1 byte) | ~13.6µs |
+| Transaction overhead | ~30µs |
+
+### Protocol Overhead at 400kHz (Reference)
 
 | Element | Time |
 |---------|------|
@@ -48,17 +75,6 @@
 | STOP condition | ~5µs |
 | Address write (1 byte) | ~22.5µs |
 | Transaction overhead | ~50µs |
-
-### Protocol Overhead at 500kHz
-
-| Element | Time |
-|---------|------|
-| Bit time | 2.0µs |
-| Byte time (8 bits + ACK) | 18.0µs |
-| START condition | ~4µs |
-| STOP condition | ~4µs |
-| Address write (1 byte) | ~18µs |
-| Transaction overhead | ~40µs |
 
 ---
 
@@ -73,7 +89,19 @@ Location: [main.cpp:383-441](src/main.cpp#L383-L441)
 **Frequency**: Every cycle
 **Operation**: Read 9 bytes via I2C (2×24-bit flow values + CRC bytes)
 
-**Timing @ 400kHz I2C**:
+**Timing @ 660kHz I2C (Actual Measured)**:
+| Phase | Time |
+|-------|------|
+| I2C START + address | ~16.6µs |
+| Read 9 data bytes | 9 × 13.6µs = 122.4µs |
+| I2C STOP | ~3µs |
+| **Subtotal I2C** | **~142µs** |
+| CRC validation | 0µs (disabled) |
+| Data parsing & float conversion | ~10µs |
+| Buffer operations | ~5µs |
+| **TOTAL** | **~157µs** |
+
+**Timing @ 400kHz I2C (Reference)**:
 | Phase | Time |
 |-------|------|
 | I2C START + address | ~27.5µs |
@@ -84,17 +112,6 @@ Location: [main.cpp:383-441](src/main.cpp#L383-L441)
 | Data parsing & float conversion | ~10µs |
 | Buffer operations | ~5µs |
 | **TOTAL** | **~250µs** |
-
-**Timing @ 500kHz I2C**:
-| Phase | Time |
-|-------|------|
-| I2C START + address | ~22µs |
-| Read 9 data bytes | 9 × 18µs = 162µs |
-| I2C STOP | ~4µs |
-| **Subtotal I2C** | **~188µs** |
-| Data parsing & conversion | ~10µs |
-| Buffer operations | ~5µs |
-| **TOTAL** | **~203µs** |
 
 **Code Reference**: [SensorReader.cpp:readSFM3505AllFlows()](src/SensorReader.cpp)
 
@@ -175,7 +192,21 @@ Location: [main.cpp:383-441](src/main.cpp#L383-L441)
 
 ## Total Execution Time Per Cycle
 
-### At 2kHz (500µs interval) with 400kHz I2C
+### At 2kHz (500µs interval) with 660kHz I2C (Actual)
+
+| Operation | Time (µs) | % of Total |
+|-----------|-----------|------------|
+| **SFM3505 Flow Sensor Read** | 157 | 91.3% |
+| **PID Control Execution** | 7.5 | 4.4% |
+| **WiFi Buffer Update** | 4 | 2.3% |
+| **Loop Overhead** | 3 | 1.7% |
+| **TOTAL EXECUTION** | **171.5** | **100%** |
+
+**Margin**: 500 - 171.5 = **328.5µs (65.7%)**
+
+---
+
+### At 2kHz (500µs interval) with 400kHz I2C (Reference)
 
 | Operation | Time (µs) | % of Total |
 |-----------|-----------|------------|
@@ -186,20 +217,6 @@ Location: [main.cpp:383-441](src/main.cpp#L383-L441)
 | **TOTAL EXECUTION** | **264.5** | **100%** |
 
 **Margin**: 500 - 264.5 = **235.5µs (47.1%)**
-
----
-
-### At 2kHz (500µs interval) with 500kHz I2C
-
-| Operation | Time (µs) | % of Total |
-|-----------|-----------|------------|
-| **SFM3505 Flow Sensor Read** | 203 | 93.1% |
-| **PID Control Execution** | 7.5 | 3.4% |
-| **WiFi Buffer Update** | 4 | 1.8% |
-| **Loop Overhead** | 3 | 1.4% |
-| **TOTAL EXECUTION** | **217.5** | **100%** |
-
-**Margin**: 500 - 217.5 = **282.5µs (56.5%)**
 
 ---
 
@@ -256,25 +273,26 @@ All scenarios maintain timing with comfortable margin (>40% remaining).
 
 ## Safe Operating Ranges
 
-### With Current I2C Clock (400kHz)
+### With Actual I2C Clock (~660kHz, ESP32 Hardware Limited)
 
 | Rate | Interval | Execution | Margin | Margin % | Status |
 |------|----------|-----------|--------|----------|--------|
-| **100Hz** | 10ms | 264.5µs | 9735.5µs | 97.4% | ✅ Current default |
-| **500Hz** | 2ms | 264.5µs | 1735.5µs | 86.8% | ✅ Very safe |
-| **1kHz** | 1ms | 264.5µs | 735.5µs | 73.6% | ✅ Safe |
-| **2kHz** | 500µs | 264.5µs | 235.5µs | 47.1% | ✅ **Safe - recommended max** |
-| **2.5kHz** | 400µs | 264.5µs | 135.5µs | 33.9% | ⚠️ Tight but feasible |
-| **3kHz** | 333µs | 264.5µs | 68.5µs | 20.6% | ⚠️ Risky - jitter issues likely |
+| **100Hz** | 10ms | 171.5µs | 9828.5µs | 98.3% | ✅ Current default |
+| **500Hz** | 2ms | 171.5µs | 1828.5µs | 91.4% | ✅ Very safe |
+| **1kHz** | 1ms | 171.5µs | 828.5µs | 82.9% | ✅ Safe |
+| **2kHz** | 500µs | 171.5µs | 328.5µs | 65.7% | ✅ **Very safe** |
+| **2.5kHz** | 400µs | 171.5µs | 228.5µs | 57.1% | ✅ Safe |
+| **3kHz** | 333µs | 171.5µs | 161.5µs | 48.5% | ✅ Safe |
+| **4kHz** | 250µs | 171.5µs | 78.5µs | 31.4% | ⚠️ Tight but feasible |
+| **5kHz** | 200µs | 171.5µs | 28.5µs | 14.3% | ⚠️ Risky |
 
-### With Increased I2C Clock (500kHz)
+### Reference: With 400kHz I2C (Slower)
 
 | Rate | Interval | Execution | Margin | Margin % | Status |
 |------|----------|-----------|--------|----------|--------|
-| **2kHz** | 500µs | 217.5µs | 282.5µs | 56.5% | ✅ Very safe |
-| **3kHz** | 333µs | 217.5µs | 115.5µs | 34.7% | ✅ Safe |
-| **3.3kHz** | 300µs | 217.5µs | 82.5µs | 27.5% | ⚠️ Tight but feasible |
-| **4kHz** | 250µs | 217.5µs | 32.5µs | 13.0% | ⚠️ Risky |
+| **2kHz** | 500µs | 264.5µs | 235.5µs | 47.1% | ✅ Safe |
+| **2.5kHz** | 400µs | 264.5µs | 135.5µs | 33.9% | ⚠️ Tight |
+| **3kHz** | 333µs | 264.5µs | 68.5µs | 20.6% | ⚠️ Risky |
 
 ---
 
@@ -425,7 +443,9 @@ console.log("Samples per fetch:", data.count);
 | `X5000` | 200Hz | 5ms | Higher bandwidth control |
 | `X2000` | 500Hz | 2ms | Fast response applications |
 | `X1000` | 1kHz | 1ms | Very fast control |
-| `X500` | 2kHz | 0.5ms | **Maximum recommended** |
+| `X500` | 2kHz | 0.5ms | **Very safe** |
+| `X333` | 3kHz | 0.33ms | Safe maximum |
+| `X250` | 4kHz | 0.25ms | Aggressive (tight margin) |
 
 ### Set Output Loop Rate
 
@@ -443,11 +463,11 @@ console.log("Samples per fetch:", data.count);
 
 ### Primary Bottleneck: SFM3505 I2C Read
 
-**Impact**: 94.5% of control loop execution time
+**Impact**: 91.3% of control loop execution time (at 660kHz I2C)
 
 **Why it dominates**:
 - 9 bytes must be read sequentially over I2C
-- I2C clock limited to 400-500kHz (sensor datasheet)
+- I2C clock limited by ESP32 hardware to ~660kHz (despite requesting higher)
 - Each byte requires 9 clock cycles (8 data + 1 ACK)
 - Protocol overhead (START/STOP/address)
 
@@ -474,21 +494,21 @@ console.log("Samples per fetch:", data.count);
 
 ### ✅ 2kHz Operation is HIGHLY FEASIBLE
 
-**With current configuration (400kHz I2C)**:
+**With actual I2C clock (~660kHz, measured)**:
+- Execution: 171.5µs
+- Available: 500µs
+- **Margin: 328.5µs (65.7%)**
+- Status: **Very safe with excellent margin**
+
+**With 400kHz I2C (reference)**:
 - Execution: 264.5µs
 - Available: 500µs
 - **Margin: 235.5µs (47.1%)**
 - Status: **Safe for production use**
 
-**With optimized configuration (500kHz I2C)**:
-- Execution: 217.5µs
-- Available: 500µs
-- **Margin: 282.5µs (56.5%)**
-- Status: **Very safe with excellent margin**
-
 ### Recommended Configuration
 
-1. **Increase I2C to 500kHz** for extra margin
+1. **Keep I2C at 1MHz setting** (achieves ~660kHz actual - faster than 400kHz spec)
 2. **Use `X500` command** to enable 2kHz control
 3. **Keep output loop at 10Hz** (`T100000`) - display doesn't need faster updates
 4. **Monitor timing** during initial deployment
@@ -498,8 +518,8 @@ console.log("Samples per fetch:", data.count);
 
 | Configuration | Conservative | Aggressive |
 |---------------|--------------|------------|
+| **660kHz I2C (actual)** | 3.0 kHz | 4.0 kHz |
 | **400kHz I2C** | 2.0 kHz | 2.5 kHz |
-| **500kHz I2C** | 2.5 kHz | 3.3 kHz |
 
 **Recommendation**: Stay at or below conservative limits for production use.
 

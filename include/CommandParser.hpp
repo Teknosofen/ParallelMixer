@@ -40,7 +40,9 @@ public:
   static void printHelp();
   static void printSettings(const SystemConfig& config, int controller_mode,
                            float offset, float amplitude, float period_seconds,
-                           float valve_signal);
+                           float valve_signal,
+                           float sweep_start = 0, float sweep_stop = 0,
+                           float sweep_time = 0, bool sweep_log = false);
   
 private:
   String _command_str;

@@ -14,7 +14,8 @@ enum ControllerMode {
   VALVE_SET_VALUE_CONTROL = 1,
   SINE_CONTROL = 2,
   STEP_CONTROL = 3,
-  TRIANGLE_CONTROL = 4
+  TRIANGLE_CONTROL = 4,
+  SWEEP_CONTROL = 5
 };
 
 struct PIDConfig {
@@ -28,6 +29,13 @@ struct SignalGeneratorConfig {
   float offset;           // Offset as percentage (0.0-100.0%)
   float amplitude;        // Amplitude as percentage (0.0-100.0%)
   float period_seconds;   // Period time in seconds
+};
+
+struct SweepConfig {
+  float start_freq;       // Start frequency in Hz
+  float stop_freq;        // Stop frequency in Hz
+  float sweep_time;       // Total sweep duration in seconds
+  bool logarithmic;       // true = logarithmic sweep, false = linear sweep
 };
 
 struct ControlState {
@@ -57,6 +65,11 @@ public:
   void setSignalGeneratorConfig(const SignalGeneratorConfig& config);
   SignalGeneratorConfig getSignalGeneratorConfig() const;
   float updateSignalGenerator();  // Returns percentage (0-100%)
+
+  // Sweep generator control
+  void setSweepConfig(const SweepConfig& config);
+  SweepConfig getSweepConfig() const;
+  float updateSweepGenerator();   // Returns percentage (0-100%)
   
   // Direct valve control (percentage-based interface)
   void setValveControlSignal(float percent);  // 0.0-100.0%
@@ -97,6 +110,11 @@ private:
   float _valve_signal_externally_set;  // Percentage (0-100%)
   float _valve_signal_generated;      // Percentage (0-100%)
 
+  // Sweep generator state
+  SweepConfig _sweep_config;
+  uint32_t _sweep_start_time_us;      // Microseconds timestamp of sweep start
+  float _sweep_phase;                  // Accumulated phase for sweep (0.0 to 1.0 per cycle)
+
   // Serial actuator reader pointer (for forwarding serial calls)
   SerialActuatorReader* _serialActuatorReader;
 
@@ -108,6 +126,7 @@ private:
   float generateSine(float phase);
   float generateStep(float phase);
   float generateTriangle(float phase);
+  float generateSweep();  // Frequency sweep using offset/amplitude
 
   // Conversion helpers - hardware abstraction
   // These methods encapsulate knowledge about hardware resolution (12-bit = 0-4095)

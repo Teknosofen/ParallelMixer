@@ -81,17 +81,21 @@ void CommandParser::printHelp() {
   Serial.println("D for derivative const [-] float");
   Serial.println("C for controller mode");
   Serial.println("  0 = PI controller, 1 = Valve set value");
-  Serial.println("  2 = Sine, 3 = Step, 4 = Triangle");
+  Serial.println("  2 = Sine, 3 = Step, 4 = Triangle, 5 = Sweep");
   Serial.println("O for Offset in [%], float 0.0-100.0");
   Serial.println("A for Amplitude in [%], float 0.0-100.0");
   Serial.println("S for period time in [seconds], float");
+  Serial.println("W for sweep: W<start_freq>,<stop_freq>,<sweep_time>[,log|lin]");
+  Serial.println("  Example: W0.1,10,20,log (0.1-10Hz in 20s, logarithmic)");
   Serial.println("V for manual setting of valve output [%], float 0.0-100.0");
   Serial.println("! lists current settings");
 }
 
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,
                                   float offset, float amplitude, float period_seconds,
-                                  float valve_signal) {
+                                  float valve_signal,
+                                  float sweep_start, float sweep_stop,
+                                  float sweep_time, bool sweep_log) {
   Serial.printf("T= %lu us (GUI/serial output)\n", config.delta_t);
   Serial.printf("X= %lu us (control execution)\n", config.control_interval);
   Serial.printf("F= %.2f L/min\n", config.digital_flow_reference);
@@ -100,6 +104,7 @@ void CommandParser::printSettings(const SystemConfig& config, int controller_mod
   Serial.printf("O= %.2f %%\n", offset);
   Serial.printf("A= %.2f %%\n", amplitude);
   Serial.printf("S= %.3f s\n", period_seconds);
+  Serial.printf("W= %.3f -> %.3f Hz, %.3f s, %s\n", sweep_start, sweep_stop, sweep_time, sweep_log ? "log" : "lin");
   Serial.printf("V= %.2f %%\n", valve_signal);
   Serial.println();
 }
@@ -254,7 +259,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
     case 'C': case 'c':  // Controller mode
       if (params.length() > 0) {
         int mode = params.toInt();
-        if (mode >= 0 && mode <= 4) {
+        if (mode >= 0 && mode <= 5) {
           actuator.setControllerMode((ControllerMode)mode);
           Serial.print(mode);
           sendOK();
@@ -352,7 +357,59 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
         }
       }
       break;
-      
+
+    case 'W': case 'w':  // Sweep configuration: W<start_freq>,<stop_freq>,<sweep_time>[,log|lin]
+      {
+        SweepConfig sweepConfig = actuator.getSweepConfig();
+        if (params.length() > 0) {
+          // Parse comma-separated parameters
+          int comma1 = params.indexOf(',');
+          int comma2 = params.indexOf(',', comma1 + 1);
+          int comma3 = params.indexOf(',', comma2 + 1);
+
+          if (comma1 > 0 && comma2 > comma1) {
+            // Parse start_freq, stop_freq, sweep_time
+            sweepConfig.start_freq = params.substring(0, comma1).toFloat();
+            sweepConfig.stop_freq = params.substring(comma1 + 1, comma2).toFloat();
+
+            if (comma3 > comma2) {
+              // Has optional log/lin parameter
+              sweepConfig.sweep_time = params.substring(comma2 + 1, comma3).toFloat();
+              String sweepType = params.substring(comma3 + 1);
+              sweepType.trim();
+              sweepType.toLowerCase();
+              sweepConfig.logarithmic = (sweepType == "log");
+            } else {
+              // No log/lin parameter, just sweep_time
+              sweepConfig.sweep_time = params.substring(comma2 + 1).toFloat();
+            }
+
+            // Validate parameters
+            if (sweepConfig.start_freq < 0.001) sweepConfig.start_freq = 0.001;  // Min 1mHz
+            if (sweepConfig.stop_freq < 0.001) sweepConfig.stop_freq = 0.001;
+            if (sweepConfig.sweep_time < 0.1) sweepConfig.sweep_time = 0.1;      // Min 100ms
+            if (sweepConfig.sweep_time > 3600.0) sweepConfig.sweep_time = 3600.0; // Max 1 hour
+
+            actuator.setSweepConfig(sweepConfig);
+            Serial.printf("W= %.3f,%.3f,%.3f,%s",
+                          sweepConfig.start_freq,
+                          sweepConfig.stop_freq,
+                          sweepConfig.sweep_time,
+                          sweepConfig.logarithmic ? "log" : "lin");
+            sendOK();
+          } else {
+            sendError();
+          }
+        } else {
+          Serial.printf("W= %.3f Hz -> %.3f Hz, %.3f s, %s\n",
+                        sweepConfig.start_freq,
+                        sweepConfig.stop_freq,
+                        sweepConfig.sweep_time,
+                        sweepConfig.logarithmic ? "log" : "lin");
+        }
+      }
+      break;
+
     case '?':  // Help
       printHelp();
       break;
@@ -360,10 +417,13 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
     case '!':  // Print settings
       {
         SignalGeneratorConfig sigConfig = actuator.getSignalGeneratorConfig();
+        SweepConfig sweepConfig = actuator.getSweepConfig();
         printSettings(config, actuator.getControllerMode(),
                      sigConfig.offset, sigConfig.amplitude,
                      sigConfig.period_seconds,
-                     actuator.getValveControlSignal());
+                     actuator.getValveControlSignal(),
+                     sweepConfig.start_freq, sweepConfig.stop_freq,
+                     sweepConfig.sweep_time, sweepConfig.logarithmic);
       }
       break;
       
