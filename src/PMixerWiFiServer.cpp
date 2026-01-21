@@ -95,13 +95,19 @@ void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, fl
     _temperatureHistory.push_back(temperature);
 
     // Also add to buffer for high-speed web transfer
-    _bufferTimestamps.push_back(timestamp);
-    _bufferFlow.push_back(flow);
-    _bufferPressure.push_back(pressure);
-    _bufferValve.push_back(signal);
-    _bufferCurrent.push_back(current);
-    _bufferLowPressure.push_back(lowPressure);
-    _bufferTemperature.push_back(temperature);
+    // Safety limit: prevent unbounded growth if client disconnects
+    // 4000 samples = ~2s at 2kHz, ~4s at 1kHz, ~200KB memory
+    const size_t MAX_BUFFER_SIZE = 4000;
+    if (_bufferTimestamps.size() < MAX_BUFFER_SIZE) {
+        _bufferTimestamps.push_back(timestamp);
+        _bufferFlow.push_back(flow);
+        _bufferPressure.push_back(pressure);
+        _bufferValve.push_back(signal);
+        _bufferCurrent.push_back(current);
+        _bufferLowPressure.push_back(lowPressure);
+        _bufferTemperature.push_back(temperature);
+    }
+    // When buffer full, new data is dropped until client fetches
 
     trimDataHistory();
 }
@@ -387,7 +393,7 @@ String PMixerWiFiServer::generateHtmlPage() {
         </div>
         
         <div class="button-container">
-            <button onclick="saveDataToCsv()">💾 Save Data to CSV</button>
+            <button onclick="saveDataToTxt()">💾 Save Data</button>
             <button onclick="clearData()">🗑️ Clear Graph</button>
         </div>
     </div>
@@ -596,42 +602,42 @@ String PMixerWiFiServer::generateHtmlPage() {
             }
         }
 
-        // Save data to CSV
-        function saveDataToCsv() {
+        // Save data to TXT file
+        function saveDataToTxt() {
             if (dataHistory.timestamps.length === 0) {
                 alert('No data to save!');
                 return;
             }
 
-            let csv = 'Timestamp (ms)\tFlow\tPressure\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\n';
+            let txt = 'Timestamp (ms)\tFlow\tPressure\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\n';
 
             for (let i = 0; i < dataHistory.timestamps.length; i++) {
-                csv += dataHistory.timestamps[i] + '\t';
-                csv += dataHistory.flow[i].toFixed(2) + '\t';
-                csv += dataHistory.pressure[i].toFixed(2) + '\t';
-                csv += dataHistory.lowPressure[i].toFixed(2) + '\t';
-                csv += dataHistory.temperature[i].toFixed(1) + '\t';
-                csv += dataHistory.valve[i].toFixed(2) + '\t';
-                csv += dataHistory.current[i].toFixed(3) + '\n';
+                txt += dataHistory.timestamps[i] + '\t';
+                txt += dataHistory.flow[i].toFixed(2) + '\t';
+                txt += dataHistory.pressure[i].toFixed(2) + '\t';
+                txt += dataHistory.lowPressure[i].toFixed(2) + '\t';
+                txt += dataHistory.temperature[i].toFixed(1) + '\t';
+                txt += dataHistory.valve[i].toFixed(2) + '\t';
+                txt += dataHistory.current[i].toFixed(3) + '\n';
             }
 
             // Create download
-            const blob = new Blob([csv], { type: 'text/csv' });
+            const blob = new Blob([txt], { type: 'text/plain' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            
+
             // Generate filename with timestamp
             const now = new Date();
-            const filename = 'pmixer_data_' + 
-                now.getFullYear() + 
-                ('0' + (now.getMonth() + 1)).slice(-2) + 
+            const filename = 'pmixer_data_' +
+                now.getFullYear() +
+                ('0' + (now.getMonth() + 1)).slice(-2) +
                 ('0' + now.getDate()).slice(-2) + '_' +
-                ('0' + now.getHours()).slice(-2) + 
-                ('0' + now.getMinutes()).slice(-2) + 
-                ('0' + now.getSeconds()).slice(-2) + 
-                '.csv';
-            
+                ('0' + now.getHours()).slice(-2) +
+                ('0' + now.getMinutes()).slice(-2) +
+                ('0' + now.getSeconds()).slice(-2) +
+                '.txt';
+
             a.download = filename;
             document.body.appendChild(a);
             a.click();

@@ -515,6 +515,9 @@ void loop() {
       case TRIANGLE_CONTROL:
         ctrlMode = "Triangle";
         break;
+      case SWEEP_CONTROL:
+        ctrlMode = "Sweep";
+        break;
       default:
         ctrlMode = "Unknown";
         break;
