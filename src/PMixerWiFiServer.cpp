@@ -645,12 +645,21 @@ String PMixerWiFiServer::generateHtmlPage() {
             window.URL.revokeObjectURL(url);
         }
 
-        // Clear data
+        // Clear data (both graph and save buffer)
         function clearData() {
-            if (confirm('Clear all graphed data?')) {
+            if (confirm('Clear all data (graph and save buffer)?')) {
+                // Clear chart display
                 chart.data.labels = [];
                 chart.data.datasets.forEach(dataset => dataset.data = []);
                 chart.update();
+                // Clear data history for file saving
+                dataHistory.timestamps = [];
+                dataHistory.flow = [];
+                dataHistory.pressure = [];
+                dataHistory.valve = [];
+                dataHistory.current = [];
+                dataHistory.lowPressure = [];
+                dataHistory.temperature = [];
             }
         }
 

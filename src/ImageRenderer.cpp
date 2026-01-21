@@ -151,19 +151,43 @@ void ImageRenderer::drawStatusField() {
 }
 
 void ImageRenderer::drawWiFiAPIP(String WiFiAPIP, String wiFiSSID) {
-    tft.setFreeFont(FSS9);  
+    static String oldIP = "";
+    static String oldSSID = "";
+    tft.setFreeFont(FSS9);
+    tft.setTextSize(1);
+    // Clear previous IP text by drawing in background color
+    if (oldIP.length() > 0) {
+        tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+        tft.drawString(oldIP, wiFiAPIPPos.x, wiFiAPIPPos.y, 2);
+    }
+    // Draw new IP text
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
-    tft.setTextSize(1);
-    tft.drawString(WiFiAPIP, wiFiAPIPPos.x, wiFiAPIPPos.y, 2); // Print another message on the display
-    tft.setTextSize(1);
-    tft.drawString("SSID: " + wiFiSSID, wiFiSSIDPos.x, wiFiSSIDPos.y, 2); // Print another message on the display
+    tft.drawString(WiFiAPIP, wiFiAPIPPos.x, wiFiAPIPPos.y, 2);
+    oldIP = WiFiAPIP;
+    // Clear previous SSID text by drawing in background color
+    if (oldSSID.length() > 0) {
+        tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+        tft.drawString("SSID: " + oldSSID, wiFiSSIDPos.x, wiFiSSIDPos.y, 2);
+    }
+    // Draw new SSID text
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    tft.drawString("SSID: " + wiFiSSID, wiFiSSIDPos.x, wiFiSSIDPos.y, 2);
+    oldSSID = wiFiSSID;
 }
 
 void ImageRenderer::drawWiFiPromt(String WiFiPrompt) {
-    tft.setFreeFont(FSS9);  
-    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    static String oldPrompt = "";
+    tft.setFreeFont(FSS9);
     tft.setTextSize(1);
-    tft.drawString(WiFiPrompt,  wiFiPromptPos.x, wiFiPromptPos.y , 2); // Print another message on the display, small font
+    // Clear previous prompt text by drawing in background color
+    if (oldPrompt.length() > 0) {
+        tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+        tft.drawString(oldPrompt, wiFiPromptPos.x, wiFiPromptPos.y, 2);
+    }
+    // Draw new prompt text
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    tft.drawString(WiFiPrompt, wiFiPromptPos.x, wiFiPromptPos.y, 2);
+    oldPrompt = WiFiPrompt;
 }
 
 void ImageRenderer::drawControllerMode(const String& mode) {

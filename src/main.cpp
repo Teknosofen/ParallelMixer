@@ -551,8 +551,8 @@ void loop() {
       hostCom.println("Key1 short press - Disabling WiFi");
       wifiServer.stop();
       hostCom.println("WiFi Access Point stopped");
-      renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
-      renderer.drawWiFiPromt("Long press: enable ");
+      renderer.drawWiFiAPIP("WiFi OFF", "No SSID");
+      renderer.drawWiFiPromt("Long press: enable");
     }
   }
   
