@@ -217,8 +217,7 @@ void setup() {
   // Enable display power
   pinMode(DISPLAY_POWER_PIN, OUTPUT);
   digitalWrite(DISPLAY_POWER_PIN, HIGH);
-  delay(100);
-
+  
   // Initialize display
   renderer.begin();
   renderer.showBootScreen(parallelVerLbl, __DATE__, __TIME__);
@@ -232,7 +231,7 @@ void setup() {
   sysConfig.digital_flow_reference = 0.0;
 
   // Initialize command parser
-  parser.begin(250000);
+  parser.begin(1000000);
 
   // Print startup banner
   hostCom.println("\n╔═══════════════════════════════════╗");
@@ -248,7 +247,7 @@ void setup() {
 
   Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_CLOCK_FREQ);
   digitalWrite(I2C0_PULLUP_CTRL_PIN, HIGH);  // Enable pull-ups via GPIO21
-  delay(10);
+  // delay(10);
 
   // Scan I2C bus for devices
   hostCom.println("Scanning I2C bus...");
@@ -273,7 +272,7 @@ void setup() {
       else if (address == 0x76) hostCom.print(" - BME280");
 
       // ABPDLNN100MG2A3 has address 0x18
-      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)"); // wrong address
+      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)"); // wrong address, unfortunately it also whas 0x28
       else hostCom.print(" - unknown device");
       
       hostCom.println();
@@ -293,6 +292,7 @@ void setup() {
   // Display I2C scan results on screen
   String line2 = "Bus 0: " + bus0Addresses;
   renderer.showLinesOnScreen("I2C devices found", line2.c_str(), "Bus 1: N/A");
+  hostCom.printf("I2C Bus 0 addr: %s\n", bus0Addresses.c_str());
   delay(2000);
 
   // Create sensor reader
@@ -433,6 +433,9 @@ void loop() {
     // ========================================================================
     // Update WiFi buffer at high-speed control rate (for 50+ Hz web updates)
     // ========================================================================
+
+
+    
     wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
                            sensorData_bus0.supply_pressure,
                            actuator.getValveControlSignal(),

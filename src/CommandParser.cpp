@@ -391,7 +391,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
             if (sweepConfig.sweep_time > 3600.0) sweepConfig.sweep_time = 3600.0; // Max 1 hour
 
             actuator.setSweepConfig(sweepConfig);
-            Serial.printf("W= %.3f,%.3f,%.3f,%s",
+            Serial.printf("W= %.3f, %.3f, %.3f, %s",
                           sweepConfig.start_freq,
                           sweepConfig.stop_freq,
                           sweepConfig.sweep_time,
