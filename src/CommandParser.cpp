@@ -88,18 +88,21 @@ void CommandParser::printHelp() {
   Serial.println("W for sweep: W<start_freq>,<stop_freq>,<sweep_time>[,log|lin]");
   Serial.println("  Example: W0.1,10,20,log (0.1-10Hz in 20s, logarithmic)");
   Serial.println("V for manual setting of valve output [%], float 0.0-100.0");
+  Serial.println("M for MUX channel selection (0-5)");
+  Serial.println("  0=Direct, 1=AirValve, 2=O2Valve, 3=ExpValve, 4=NC, 5=Blower");
   Serial.println("! lists current settings");
 }
 
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,
                                   float offset, float amplitude, float period_seconds,
-                                  float valve_signal,
+                                  float valve_signal, uint8_t mux_channel,
                                   float sweep_start, float sweep_stop,
                                   float sweep_time, bool sweep_log) {
   Serial.printf("T= %lu us (GUI/serial output)\n", config.delta_t);
   Serial.printf("X= %lu us (control execution)\n", config.control_interval);
   Serial.printf("F= %.2f L/min\n", config.digital_flow_reference);
   Serial.printf("Q= %d\n", config.quiet_mode);
+  Serial.printf("M= %d (%s)\n", mux_channel, getMuxChannelName(mux_channel));
   Serial.printf("C= %d\n", controller_mode);
   Serial.printf("O= %.2f %%\n", offset);
   Serial.printf("A= %.2f %%\n", amplitude);
@@ -169,7 +172,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
     case 'X': case 'x':  // Control system execution interval
       if (params.length() > 0) {
         config.control_interval = params.toInt();
-        if (config.control_interval < 1000) config.control_interval = 1000;  // Min 1ms
+        if (config.control_interval < 500) config.control_interval = 500;  // Min 1ms
         if (config.control_interval > 1000000) config.control_interval = 1000000;  // Max 1 second
         Serial.print("X= ");
         Serial.print(config.control_interval);
@@ -358,6 +361,22 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
       }
       break;
 
+    case 'M': case 'm':  // MUX channel selection (0-5)
+      if (params.length() > 0) {
+        int channel = params.toInt();
+        if (channel >= 0 && channel <= 5) {
+          config.mux_channel = (uint8_t)channel;
+          Serial.printf("M= %d (%s)", channel, getMuxChannelName(channel));
+          sendOK();
+        } else {
+          Serial.println("Error: MUX channel must be 0-5");
+          sendError();
+        }
+      } else {
+        Serial.printf("M= %d (%s)\n", config.mux_channel, getMuxChannelName(config.mux_channel));
+      }
+      break;
+
     case 'W': case 'w':  // Sweep configuration: W<start_freq>,<stop_freq>,<sweep_time>[,log|lin]
       {
         SweepConfig sweepConfig = actuator.getSweepConfig();
@@ -422,6 +441,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
                      sigConfig.offset, sigConfig.amplitude,
                      sigConfig.period_seconds,
                      actuator.getValveControlSignal(),
+                     config.mux_channel,
                      sweepConfig.start_freq, sweepConfig.stop_freq,
                      sweepConfig.sweep_time, sweepConfig.logarithmic);
       }

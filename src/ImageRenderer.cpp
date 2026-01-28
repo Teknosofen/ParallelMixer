@@ -191,15 +191,18 @@ void ImageRenderer::drawWiFiPromt(String WiFiPrompt) {
 }
 
 void ImageRenderer::drawControllerMode(const String& mode) {
-    static String oldMode = "Valve Set";
-    // Clear previous text by drawing background rectangle
-    tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
-    tft.setFreeFont(FSS9);  
-    tft.drawString("Mode: " + oldMode, statusControllerModePos.x, statusControllerModePos.y, 2);
-    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    static String oldMode = "";
+    tft.setFreeFont(FSS9);
     tft.setTextSize(1);
-    // Draw the mode string
+    // Clear previous text by drawing in background color
+    if (oldMode.length() > 0) {
+        tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+        tft.drawString("Mode: " + oldMode, statusControllerModePos.x, statusControllerModePos.y, 2);
+    }
+    // Draw new mode text
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.drawString("Mode: " + mode, statusControllerModePos.x, statusControllerModePos.y, 2);
+    oldMode = mode;
 }
 
 void ImageRenderer::drawFlow(const String& flow) {

@@ -5,7 +5,7 @@
 #include "Wire.h"
 
 // Forward declaration
-class SerialActuatorReader;
+class SerialMuxRouter;
 
 #define I2Cadr_MCP4725 0x60
 
@@ -82,14 +82,30 @@ public:
   // Get current control state
   ControlState getControlState() const;
 
-  // Serial actuator communication (Serial1) - forwarded to SerialActuatorReader
-  // These methods are kept for backward compatibility
-  // Note: Set the serial reader pointer before using these methods
-  void setSerialActuatorReader(SerialActuatorReader* reader);
-  bool sendSerialCommand(char command, float value);
-  bool readSerialResponse(char& command, float& value, uint32_t timeout_ms = 100);
-  bool readSerialMeasurement(char& command, float& value, uint32_t timeout_ms = 100);
-  void clearSerialBuffer();
+  // Serial MUX router communication
+  // Note: Set the router pointer and address before using serial methods
+  void setSerialMuxRouter(SerialMuxRouter* router, uint8_t muxAddress = 0);
+  uint8_t getMuxAddress() const;
+
+  // Send commands via MUX router
+  bool sendSetCurrent(float value);
+  bool sendSetVoltage(float value);
+  bool sendSetFlow(float value);
+  bool sendSetPressure(float value);
+  bool sendSetBlowerRPM(float value);
+  bool sendSerialCommand(char command, float value);  // Generic send
+
+  // Get measurements from MUX router (non-blocking, uses cached data)
+  float getRemoteCurrent() const;
+  float getRemoteBlowerRPM() const;
+  float getRemoteActualFlow() const;
+  float getRemoteActualPressure() const;
+
+  // Stale detection for remote data
+  bool isRemoteCurrentStale(uint32_t max_age_ms = 100) const;
+  bool isRemoteBlowerRPMStale(uint32_t max_age_ms = 100) const;
+  bool isRemoteActualFlowStale(uint32_t max_age_ms = 100) const;
+  bool isRemoteActualPressureStale(uint32_t max_age_ms = 100) const;
 
   // Main execution method - call this from the main loop
   void execute(float flow_reference, float flow_measured, int quiet_mode);
@@ -115,8 +131,9 @@ private:
   uint32_t _sweep_start_time_us;      // Microseconds timestamp of sweep start
   float _sweep_phase;                  // Accumulated phase for sweep (0.0 to 1.0 per cycle)
 
-  // Serial actuator reader pointer (for forwarding serial calls)
-  SerialActuatorReader* _serialActuatorReader;
+  // Serial MUX router pointer and address
+  SerialMuxRouter* _serialMuxRouter;
+  uint8_t _muxAddress;
 
   // Output methods (now accepts percentage)
   void outputToValve(float signal_percent);

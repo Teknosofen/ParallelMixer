@@ -1,5 +1,5 @@
 #include "ActuatorControl.hpp"
-#include "SerialActuatorReader.hpp"
+#include "SerialMuxRouter.hpp"
 #include "math.h"
 
 ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
@@ -12,7 +12,8 @@ ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
     _valve_signal_generated(0.0),
     _sweep_start_time_us(0),
     _sweep_phase(0.0),
-    _serialActuatorReader(nullptr) {
+    _serialMuxRouter(nullptr),
+    _muxAddress(0) {
 
   // Default PID configuration
   _pid_config.p_gain = 1.0;
@@ -397,40 +398,93 @@ float ActuatorControl::hardwareToPercent(uint16_t hardware) const {
 }
 
 // ============================================================================
-// Serial Actuator Communication - Forwarded to SerialActuatorReader
+// Serial MUX Router Communication
 // ============================================================================
-// These methods forward calls to the SerialActuatorReader instance
-// Kept for backward compatibility with existing code
+// These methods forward calls to the SerialMuxRouter instance using the
+// configured MUX address for this ActuatorControl instance.
 // ============================================================================
 
-void ActuatorControl::setSerialActuatorReader(SerialActuatorReader* reader) {
-  _serialActuatorReader = reader;
+void ActuatorControl::setSerialMuxRouter(SerialMuxRouter* router, uint8_t muxAddress) {
+  _serialMuxRouter = router;
+  _muxAddress = muxAddress;
+}
+
+uint8_t ActuatorControl::getMuxAddress() const {
+  return _muxAddress;
+}
+
+// Send commands via MUX router
+
+bool ActuatorControl::sendSetCurrent(float value) {
+  if (_serialMuxRouter == nullptr) return false;
+  return _serialMuxRouter->sendSetCurrent(_muxAddress, value);
+}
+
+bool ActuatorControl::sendSetVoltage(float value) {
+  if (_serialMuxRouter == nullptr) return false;
+  return _serialMuxRouter->sendSetVoltage(_muxAddress, value);
+}
+
+bool ActuatorControl::sendSetFlow(float value) {
+  if (_serialMuxRouter == nullptr) return false;
+  return _serialMuxRouter->sendSetFlow(_muxAddress, value);
+}
+
+bool ActuatorControl::sendSetPressure(float value) {
+  if (_serialMuxRouter == nullptr) return false;
+  return _serialMuxRouter->sendSetPressure(_muxAddress, value);
+}
+
+bool ActuatorControl::sendSetBlowerRPM(float value) {
+  if (_serialMuxRouter == nullptr) return false;
+  return _serialMuxRouter->sendSetBlowerRPM(_muxAddress, value);
 }
 
 bool ActuatorControl::sendSerialCommand(char command, float value) {
-  if (_serialActuatorReader == nullptr) {
-    return false;  // No serial reader configured
-  }
-  return _serialActuatorReader->sendSerialCommand(command, value);
+  if (_serialMuxRouter == nullptr) return false;
+  return _serialMuxRouter->sendCommand(_muxAddress, command, value);
 }
 
-bool ActuatorControl::readSerialResponse(char& command, float& value, uint32_t timeout_ms) {
-  if (_serialActuatorReader == nullptr) {
-    return false;  // No serial reader configured
-  }
-  return _serialActuatorReader->readSerialResponse(command, value, timeout_ms);
+// Get measurements from MUX router (non-blocking, uses cached data)
+
+float ActuatorControl::getRemoteCurrent() const {
+  if (_serialMuxRouter == nullptr) return SerialMuxRouter::INVALID_VALUE;
+  return _serialMuxRouter->getCurrent(_muxAddress);
 }
 
-bool ActuatorControl::readSerialMeasurement(char& command, float& value, uint32_t timeout_ms) {
-  if (_serialActuatorReader == nullptr) {
-    return false;  // No serial reader configured
-  }
-  return _serialActuatorReader->readSerialMeasurement(command, value, timeout_ms);
+float ActuatorControl::getRemoteBlowerRPM() const {
+  if (_serialMuxRouter == nullptr) return SerialMuxRouter::INVALID_VALUE;
+  return _serialMuxRouter->getBlowerRPM(_muxAddress);
 }
 
-void ActuatorControl::clearSerialBuffer() {
-  if (_serialActuatorReader == nullptr) {
-    return;  // No serial reader configured
-  }
-  _serialActuatorReader->clearBuffer();
+float ActuatorControl::getRemoteActualFlow() const {
+  if (_serialMuxRouter == nullptr) return SerialMuxRouter::INVALID_VALUE;
+  return _serialMuxRouter->getActualFlow(_muxAddress);
+}
+
+float ActuatorControl::getRemoteActualPressure() const {
+  if (_serialMuxRouter == nullptr) return SerialMuxRouter::INVALID_VALUE;
+  return _serialMuxRouter->getActualPressure(_muxAddress);
+}
+
+// Stale detection for remote data
+
+bool ActuatorControl::isRemoteCurrentStale(uint32_t max_age_ms) const {
+  if (_serialMuxRouter == nullptr) return true;
+  return _serialMuxRouter->isCurrentStale(_muxAddress, max_age_ms);
+}
+
+bool ActuatorControl::isRemoteBlowerRPMStale(uint32_t max_age_ms) const {
+  if (_serialMuxRouter == nullptr) return true;
+  return _serialMuxRouter->isBlowerRPMStale(_muxAddress, max_age_ms);
+}
+
+bool ActuatorControl::isRemoteActualFlowStale(uint32_t max_age_ms) const {
+  if (_serialMuxRouter == nullptr) return true;
+  return _serialMuxRouter->isActualFlowStale(_muxAddress, max_age_ms);
+}
+
+bool ActuatorControl::isRemoteActualPressureStale(uint32_t max_age_ms) const {
+  if (_serialMuxRouter == nullptr) return true;
+  return _serialMuxRouter->isActualPressureStale(_muxAddress, max_age_ms);
 }

@@ -13,7 +13,7 @@
 #include "Button.hpp"
 #define PMIXER_GRAPH_DISPLAY_POINTS 512
 #include "PMixerWiFiServer.hpp"
-#include "SerialActuatorReader.hpp"
+#include "SerialMuxRouter.hpp"
 
 // ---------------------------------
 // logo BMP file as well as factory default config files are stored in SPIFFS
@@ -41,9 +41,20 @@ ImageRenderer renderer(tft);
 SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505
 // SensorReader* sensors_bus1;   // GPIO10/11 - DISABLED FOR NOW
 
-ActuatorControl actuator(Valve_ctrl_Analogue_pin);
+// Array of actuator controls - one per MUX channel for parallel operation
+// Each channel can run its own signal generator independently
+// Note: Pin parameter unused - all valve control via serial MUX commands
+// Channels: 0 = direct (no prefix), 1-5 = MUX channels with prefix
+static const uint8_t NUM_MUX_CHANNELS = 6;
+ActuatorControl actuators[NUM_MUX_CHANNELS] = {
+  ActuatorControl(0), ActuatorControl(0), ActuatorControl(0),
+  ActuatorControl(0), ActuatorControl(0), ActuatorControl(0)
+};
+// Reference to currently selected actuator (for command interface)
+#define actuator actuators[sysConfig.mux_channel]
+
 CommandParser parser;
-SerialActuatorReader actuatorReader(&Serial1);
+SerialMuxRouter muxRouter(&Serial1);
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
 PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
@@ -108,36 +119,38 @@ void outputData() {
           case TRIANGLE_CONTROL:
             modeStr = "Triangle";
             break;
+          case SWEEP_CONTROL:
+            modeStr = "Sweep";
+            break;
           default:
             modeStr = "Unknown";
             break;
         }
 
-        // Get valve control signal and Serial1 data
+        // Get valve control signal and MUX router data (selected channel)
+        uint8_t ch = sysConfig.mux_channel;
         float localValveCtrl = actuator.getValveControlSignal();
-        float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
-        float actuatorMisc = actuatorReader.getValveActuatorMisc();
-        char miscCmd = actuatorReader.getValveActuatorMiscCommand();
+        float actuatorCurrent = muxRouter.getCurrent(ch);
 
-        // Print unified output: Mode, Setting, and Received data
-        if (!actuatorReader.isCurrentStale()) {
-          hostCom.printf("[%s] V=%.2f%% -> Actuator: I=%.3fA",
-                         modeStr.c_str(), localValveCtrl, actuatorCurrent);
+        // Print unified output: Mode, MUX channel, Setting, and Received data
+        if (!muxRouter.isCurrentStale(ch)) {
+          hostCom.printf("[%s M%d] V=%.2f%% -> I=%.3fA",
+                         modeStr.c_str(), ch, localValveCtrl, actuatorCurrent);
 
-          if (!actuatorReader.isMiscStale()) {
-            if (miscCmd >= 32 && miscCmd <= 126) {
-              // Printable ASCII character
-              hostCom.printf(" %c=%.2f\n", miscCmd, actuatorMisc);
-            } else {
-              // Non-printable character - show hex value
-              hostCom.printf(" [0x%02X]=%.2f\n", (uint8_t)miscCmd, actuatorMisc);
-            }
-          } else {
-            hostCom.printf("\n");
+          // Show other available measurements if not stale
+          if (!muxRouter.isActualFlowStale(ch)) {
+            hostCom.printf(" F=%.2f", muxRouter.getActualFlow(ch));
           }
+          if (!muxRouter.isActualPressureStale(ch)) {
+            hostCom.printf(" P=%.2f", muxRouter.getActualPressure(ch));
+          }
+          if (!muxRouter.isBlowerRPMStale(ch)) {
+            hostCom.printf(" R=%.1f", muxRouter.getBlowerRPM(ch));
+          }
+          hostCom.printf("\n");
         } else {
-          hostCom.printf("[%s] V=%.2f%% -> Actuator: STALE data\n",
-                         modeStr.c_str(), localValveCtrl);
+          hostCom.printf("[%s M%d] V=%.2f%% -> Actuator: STALE data\n",
+                         modeStr.c_str(), ch, localValveCtrl);
         }
       }
       break;
@@ -175,9 +188,10 @@ void outputData() {
     case 7:  // High-speed data logging: tab-separated, no labels (minimal bandwidth)
       {
         float localValveCtrl = actuator.getValveControlSignal();
-        float actuatorCurrent = actuatorReader.getValveActuatorCurrent();
-        // Format: SupplyPressure\tLowPressure\tTemp\tAirFlow\tValveSignal\tCurrent\n
-        hostCom.printf("%.2f\t%.2f\t%.1f\t%.3f\t%.2f\t%.3f\n",
+        float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
+        // Format: Timestamp_ms\tSupplyPressure\tLowPressure\tTemp\tAirFlow\tValveSignal\tCurrent\n
+        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.2f\t%.3f\n",
+                       millis(),
                        sensorData_bus0.supply_pressure,
                        sensorData_bus0.abpd_pressure,
                        sensorData_bus0.abpd_temperature,
@@ -229,6 +243,7 @@ void setup() {
   sysConfig.PressSamplTime = 100000;   // Pressure: 100ms = 10Hz
   sysConfig.quiet_mode = 0;            // Verbose output
   sysConfig.digital_flow_reference = 0.0;
+  sysConfig.mux_channel = 0;           // MUX channel 0 = direct (no MUX prefix)
 
   // Initialize command parser
   parser.begin(1000000);
@@ -305,7 +320,7 @@ void setup() {
   hostCom.printf("Serial1: TX=GPIO%d, RX=GPIO%d @ 115200 baud\n\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
 
   // Initialize asynchronous serial reader for actuator data
-  actuatorReader.begin();
+  muxRouter.begin();
 
   // ============================================================================
   // Initialize sensors
@@ -321,10 +336,13 @@ void setup() {
   // Initialize systems
   // ============================================================================
   // WiFi starts disabled - use long key press to enable
-  actuator.initialize();
 
-  // Link actuator to serial reader for communication
-  actuator.setSerialActuatorReader(&actuatorReader);
+  // Initialize all actuator controls and link to MUX router
+  for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
+    actuators[i].initialize();
+    actuators[i].setSerialMuxRouter(&muxRouter, i);
+  }
+  hostCom.printf("Initialized %d MUX channels for parallel operation\n", NUM_MUX_CHANNELS);
 
   past_time = micros();
   control_past_time = micros();
@@ -425,10 +443,14 @@ void loop() {
     }
 
     // ========================================================================
-    // Execute control - using Bus 0 as primary
-    // Can use either legacy flow OR SFM3505 O2 flow
+    // Execute control for ALL MUX channels in parallel
+    // Each channel runs its own signal generator independently
     // ========================================================================
-    actuator.execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+    for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
+      // Note: For now, all channels share the same flow reference and sensor data
+      // In future, each channel could have independent references
+      actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+    }
 
     // ========================================================================
     // Update WiFi buffer at high-speed control rate (for 50+ Hz web updates)
@@ -436,10 +458,11 @@ void loop() {
 
 
     
+    // Log data from the selected MUX channel
     wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
                            sensorData_bus0.supply_pressure,
                            actuator.getValveControlSignal(),
-                           actuatorReader.getValveActuatorCurrent(),
+                           muxRouter.getCurrent(sysConfig.mux_channel),
                            sensorData_bus0.abpd_pressure,
                            sensorData_bus0.abpd_temperature);
   }
@@ -467,7 +490,7 @@ void loop() {
     wifiServer.updateLowPressure(sensorData_bus0.abpd_pressure);  // Send ABPD low pressure to web
     wifiServer.updateTemperature(sensorData_bus0.abpd_temperature);  // Send ABPD temperature to web
     wifiServer.updateValveSignal(actuator.getValveControlSignal());
-    wifiServer.updateCurrent(actuatorReader.getValveActuatorCurrent());  // Send actuator current to web
+    wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));  // Send current from selected MUX channel to web
   }
   
   // ============================================================================
@@ -475,7 +498,7 @@ void loop() {
   // ============================================================================
 
   // Update asynchronous serial reader - processes incoming data non-blocking
-  actuatorReader.update();
+  muxRouter.update();
 
   // Serial2 - DISABLED FOR NOW
   // if (Serial2.available()) {
@@ -491,6 +514,14 @@ void loop() {
 
   parser.update();
   parser.processCommands(sysConfig, actuator);
+
+  // Handle MUX channel change - switch to different actuator instance
+  static uint8_t lastMuxChannel = 0;
+  if (sysConfig.mux_channel != lastMuxChannel) {
+    ControllerMode mode = actuators[sysConfig.mux_channel].getControllerMode();
+    hostCom.printf("Switched to MUX channel %d (mode: %d)\n", sysConfig.mux_channel, mode);
+    lastMuxChannel = sysConfig.mux_channel;
+  }
 
   // Handle user interface update
   static uint32_t UILoopStartTime = micros();
@@ -523,8 +554,10 @@ void loop() {
         break;
     }
     
-    renderer.drawControllerMode(ctrlMode);
-    wifiServer.updateMode(ctrlMode);
+    // Include MUX channel in mode display
+    String modeWithChannel = ctrlMode + " M" + String(sysConfig.mux_channel);
+    renderer.drawControllerMode(modeWithChannel);
+    wifiServer.updateMode(modeWithChannel);
 
     // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
     renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air
@@ -534,7 +567,8 @@ void loop() {
                          String(sensorData_bus0.abpd_temperature, 1) + " C";
     renderer.drawPressure(pressureStr);
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
-    renderer.drawCurrent(String(actuatorReader.getValveActuatorCurrent(), 3) + " A");
+    // Show current from selected MUX channel
+    renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
   }
 
   // ============================================================================
