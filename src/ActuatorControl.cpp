@@ -149,6 +149,7 @@ float ActuatorControl::updateSignalGenerator() {
   }
 
   _valve_signal_generated = signal;
+  Serial.printf("OutputToValveCalled: %.2f%%\n", signal);
   outputToValve(signal);
 
   return signal;
@@ -320,6 +321,7 @@ void ActuatorControl::outputToValve(float signal_percent) {
   // Send valve command via serial to external actuator (percentage-based)
   char actuatorCMD = 'V';
   sendSerialCommand(actuatorCMD, signal_percent);
+  Serial.printf("sendSerialCommand called: %c %.2f%%\n", actuatorCMD, signal_percent);
   // Serial.println("valve CMD " + String(signal_percent) + "% " + String(millis()));
 
   // Legacy hardware output (commented out - now using serial actuator)
