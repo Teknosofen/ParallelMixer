@@ -316,8 +316,8 @@ void setup() {
   // ============================================================================
   // Initialize Serial1 (external actuator communication)
   // ============================================================================
-  Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN);
-  hostCom.printf("Serial1: TX=GPIO%d, RX=GPIO%d @ 115200 baud\n\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
+  Serial1.begin(460800, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN); // was 115200
+  hostCom.printf("Serial1: TX=GPIO%d, RX=GPIO%d @ 460800 baud\n\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
 
   // Initialize asynchronous serial reader for actuator data
   muxRouter.begin();

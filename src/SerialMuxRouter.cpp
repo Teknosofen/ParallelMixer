@@ -243,9 +243,6 @@ bool SerialMuxRouter::sendCommand(uint8_t address, char command, float value) {
 
   msg += String(command) + String(value, 2) + "\n";
   _serial->print(msg);
-  
-  // debug
-  Serial.printf("[MuxRouter] Sent to addr %d: %s", address, msg.c_str());
 
   #ifdef DEBUG_SERIAL_MUX_ROUTER
   Serial.printf("[MuxRouter] Sent to addr %d: %s", address, msg.c_str());

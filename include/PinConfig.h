@@ -16,9 +16,6 @@
 #define I2C0_SDA_PIN  43
 #define I2C0_SCL_PIN  44
 
-// I2C Bus 0 Pull-up Control - Controls power to pull-up resistors
-#define I2C0_PULLUP_CTRL_PIN 21  // Set HIGH to enable pull-ups, LOW to disable
-
 // I2C Bus 0 Clock Frequency
 // Note: ESP32-S3 I2C hardware maxes out around 800kHz-1MHz
 // Requesting 2MHz results in ~660kHz actual (hardware clamped)
@@ -58,7 +55,6 @@
 /*
 USED PINS (This configuration):
 ✅ GPIO43, 44  - I2C Bus 0 (SDA, SCL)
-✅ GPIO21      - I2C Bus 0 pull-up control (for SFM3505 reset)
 ✅ GPIO10, 11  - I2C Bus 1 (SDA, SCL)
 ✅ GPIO17, 18  - Serial1 (TX, RX) - Hardware UART1
 ✅ GPIO12, 13  - Serial2 (TX, RX)
@@ -73,7 +69,7 @@ INTERNAL BUTTONS (Not on header):
 ⚠️ GPIO0, 14   - User buttons
 
 STILL AVAILABLE:
-✅ GPIO1, 2, 3 - Available for other use (ADC capable if needed)
+✅ GPIO1, 2, 3, 21 - Available for other use (ADC capable)
 
 NOTES:
 - GPIO43/44 also used for Serial when USB CDC is off
@@ -112,28 +108,16 @@ OPTION B: Move I2C to different pins
 // ============================================================================
 
 /*
-I2C BUS 0 (Sensors Group 1) - WITH CONTROLLED PULL-UPS FOR SFM3505:
-├─ GPIO21 (Pull-up Control) ──┬── NPN transistor base (via 1kΩ resistor)
-│                             └── Controls power to pull-up resistors
-│
-├─ NPN Transistor Collector ──── 3.3V supply for pull-ups
-├─ NPN Transistor Emitter ────┬── 4.7kΩ pull-up to GPIO43 (SDA)
-│                             └── 4.7kΩ pull-up to GPIO44 (SCL)
-│
-├─ GPIO43 (SDA) ──┬── 4.7kΩ to transistor emitter
-│                 ├── SFM3505 (0x2E) - requires controlled pull-ups!
+I2C BUS 0 (Sensors Group 1):
+├─ GPIO43 (SDA) ──┬── 4.7kΩ to 3.3V
+│                 ├── SFM3505 (0x2E)
 │                 ├── SFM Sensor 1 (0x40)
 │                 ├── SPD Sensor 1 (0x25)
 │                 └── SSC Sensor 1 (0x58)
-│
-└─ GPIO44 (SCL) ──┴── 4.7kΩ to transistor emitter
-
-NOTE: SFM3505 requires pull-ups to be OFF during first 31ms after power-on!
-      GPIO21 controls an NPN transistor that switches the pull-up power.
-      This prevents the sensor from being partially powered via ESD diodes.
+└─ GPIO44 (SCL) ──┴── 4.7kΩ to 3.3V
 
 I2C BUS 1 (Sensors Group 2):
-├─ GPIO10 (SDA) ──┬── 4.7kΩ to 3.3V (standard, always on)
+├─ GPIO10 (SDA) ──┬── 4.7kΩ to 3.3V
 │                 ├── SFM Sensor 2 (0x40)
 │                 ├── SPD Sensor 2 (0x25)
 │                 └── SSC Sensor 2 (0x58)
@@ -149,25 +133,6 @@ SERIAL2 (External MCU 2):
 
 Common connections:
 └─ GND ───────────── All devices must share common ground
-
-TRANSISTOR CIRCUIT FOR PULL-UP CONTROL:
-                        +3.3V
-                          │
-                          │
-                    ┌─────┴─────┐
-                    │           │
-                  4.7kΩ       4.7kΩ
-                    │           │
-                    ├───────────┤ (Pull-up rail)
-                    │           │
-                    │         Collector
-                  SDA         ──┐
-                    │           │ NPN (2N3904 or similar)
-                  SCL         Emitter
-                    │           │
-                    │           GND
-                    │
-                  Base ─── 1kΩ ─── GPIO21
 */
 
 #endif // PIN_CONFIG_H

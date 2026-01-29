@@ -125,6 +125,7 @@ private:
   uint32_t _period_start_time_us;  // Microseconds timestamp of period start
   float _valve_signal_externally_set;  // Percentage (0-100%)
   float _valve_signal_generated;      // Percentage (0-100%)
+  float _last_sent_valve_signal;      // Track last sent value to avoid redundant sends
 
   // Sweep generator state
   SweepConfig _sweep_config;

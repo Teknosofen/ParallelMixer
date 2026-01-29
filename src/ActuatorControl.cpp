@@ -10,6 +10,7 @@ ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
     _period_start_time_us(0),
     _valve_signal_externally_set(0.0),
     _valve_signal_generated(0.0),
+    _last_sent_valve_signal(-1.0),
     _sweep_start_time_us(0),
     _sweep_phase(0.0),
     _serialMuxRouter(nullptr),
@@ -149,7 +150,6 @@ float ActuatorControl::updateSignalGenerator() {
   }
 
   _valve_signal_generated = signal;
-  Serial.printf("OutputToValveCalled: %.2f%%\n", signal);
   outputToValve(signal);
 
   return signal;
@@ -318,10 +318,16 @@ ControlState ActuatorControl::getControlState() const {
 }
 
 void ActuatorControl::outputToValve(float signal_percent) {
+  // Only send if value has changed (avoid flooding serial with redundant commands)
+  // Use small tolerance (0.01%) to handle floating point comparison
+  if (fabsf(signal_percent - _last_sent_valve_signal) < 0.01f) {
+    return;  // No change, skip sending
+  }
+
   // Send valve command via serial to external actuator (percentage-based)
   char actuatorCMD = 'V';
   sendSerialCommand(actuatorCMD, signal_percent);
-  Serial.printf("sendSerialCommand called: %c %.2f%%\n", actuatorCMD, signal_percent);
+  _last_sent_valve_signal = signal_percent;
   // Serial.println("valve CMD " + String(signal_percent) + "% " + String(millis()));
 
   // Legacy hardware output (commented out - now using serial actuator)
