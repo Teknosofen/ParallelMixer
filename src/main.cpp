@@ -14,6 +14,7 @@
 #define PMIXER_GRAPH_DISPLAY_POINTS 512
 #include "PMixerWiFiServer.hpp"
 #include "SerialMuxRouter.hpp"
+#include "FDO2_Sensor.h"
 
 // ---------------------------------
 // logo BMP file as well as factory default config files are stored in SPIFFS
@@ -58,6 +59,11 @@ SerialMuxRouter muxRouter(&Serial1);
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
 PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
+
+// FDO2 Optical Oxygen Sensor on Serial2
+FDO2_Sensor fdo2Sensor(Serial2);
+FDO2_Sensor::MeasurementData fdo2Data;
+bool fdo2Initialized = false;
 
 // System configuration
 SystemConfig sysConfig;
@@ -199,30 +205,40 @@ void outputData() {
                        localValveCtrl,
                        actuatorCurrent);
       }
+
+    case 8:  // FDO2 Oxygen Sensor data
+      if (fdo2Initialized) {
+        hostCom.printf("O2: %.2f hPa (%.2f%%) | Temp: %.1f°C | Status: 0x%02X %s\n",
+                       fdo2Data.oxygenPartialPressure_hPa,
+                       fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, 
+                                                      fdo2Data.ambientPressure_mbar),
+                       fdo2Data.temperature_C,
+                       fdo2Data.status,
+                       fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+      } else {
+        hostCom.println("FDO2 not initialized");
+      }
+      break;
+
+    case 9:  // FDO2 Extended/Raw data
+      if (fdo2Initialized) {
+        hostCom.printf("O2: %.2f hPa | T: %.1f°C | Phase: %.3f° | Signal: %.1f mV | Amb: %.1f mV | P: %.1f mbar | RH: %.1f%%\n",
+                       fdo2Data.oxygenPartialPressure_hPa,
+                       fdo2Data.temperature_C,
+                       fdo2Data.phaseShift_deg,
+                       fdo2Data.signalIntensity_mV,
+                       fdo2Data.ambientLight_mV,
+                       fdo2Data.ambientPressure_mbar,
+                       fdo2Data.relativeHumidity_percent);
+      } else {
+        hostCom.println("FDO2 not initialized");
+      }
+      break;
       break;
   }
 }
 
 void setup() {
-  // ============================================================================
-  // CRITICAL: SFM3505 Power-Up Reset - MUST BE FIRST!
-  // ============================================================================
-  // Per Sensirion documentation: SDA/SCL must be LOW for 31ms after power-on
-  // This MUST happen immediately, before any other initialization
-
-  // Step 1: Disable I2C pull-ups by controlling GPIO21
-  pinMode(I2C0_PULLUP_CTRL_PIN, OUTPUT);
-  digitalWrite(I2C0_PULLUP_CTRL_PIN, LOW);  // Turn OFF pull-ups via transistor
-
-  // Step 2: Actively pull SDA/SCL LOW via GPIO
-  pinMode(I2C0_SDA_PIN, OUTPUT);
-  pinMode(I2C0_SCL_PIN, OUTPUT);
-  digitalWrite(I2C0_SDA_PIN, LOW);
-  digitalWrite(I2C0_SCL_PIN, LOW);
-
-  // Step 3: Hold LOW for 35ms (> 31ms requirement)
-  delay(35);
-
   // Initialize USB Serial - use default USB CDC
   Serial.begin();  // For ESP32-S3 USB CDC, no baud rate needed
 
@@ -261,8 +277,6 @@ void setup() {
                  I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_CLOCK_FREQ / 1000);
 
   Wire.begin(I2C0_SDA_PIN, I2C0_SCL_PIN, I2C0_CLOCK_FREQ);
-  digitalWrite(I2C0_PULLUP_CTRL_PIN, HIGH);  // Enable pull-ups via GPIO21
-  // delay(10);
 
   // Scan I2C bus for devices
   hostCom.println("Scanning I2C bus...");
@@ -316,11 +330,50 @@ void setup() {
   // ============================================================================
   // Initialize Serial1 (external actuator communication)
   // ============================================================================
+  
+  // Initialize Serial1 for actuator communication via MUX
   Serial1.begin(460800, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN); // was 115200
   hostCom.printf("Serial1: TX=GPIO%d, RX=GPIO%d @ 460800 baud\n\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
+  // Initiate Serial1 for direct com without MUX
+  // Serial1.begin(115200, SERIAL_8N1, SERIAL1_RX_PIN, SERIAL1_TX_PIN); // was 115200
+  // hostCom.printf("Serial1: TX=GPIO%d, RX=GPIO%d @ 115200 baud\n\n", SERIAL1_TX_PIN, SERIAL1_RX_PIN);
 
   // Initialize asynchronous serial reader for actuator data
   muxRouter.begin();
+
+  // ============================================================================
+  // Initialize Serial2 (FDO2 Optical Oxygen Sensor)
+  // ============================================================================
+  
+  // Serial2 pins are defined in PinConfig.h:
+  // SERIAL2_TX_PIN = GPIO12, SERIAL2_RX_PIN = GPIO13
+  
+  hostCom.println("Initializing FDO2 Optical Oxygen Sensor on Serial2...");
+  hostCom.printf("Serial2: TX=GPIO%d, RX=GPIO%d @ 19200 baud\n", SERIAL2_TX_PIN, SERIAL2_RX_PIN);
+  
+  fdo2Initialized = fdo2Sensor.begin(19200, SERIAL2_RX_PIN, SERIAL2_TX_PIN);
+  
+  if (fdo2Initialized) {
+    FDO2_Sensor::DeviceInfo info;
+    if (fdo2Sensor.getDeviceInfo(info)) {
+      hostCom.printf("✅ FDO2 Connected: Device ID=%d, FW=%d.%02d, Channels=%d\n", 
+                     info.deviceId, info.firmwareRevision / 100, info.firmwareRevision % 100, info.numChannels);
+      
+      uint64_t uniqueId;
+      if (fdo2Sensor.getUniqueId(uniqueId)) {
+        hostCom.printf("   Serial Number: %llu\n", uniqueId);
+      }
+      
+      // Flash LED to confirm communication
+      fdo2Sensor.indicateLogo();
+    } else {
+      hostCom.println("⚠️ FDO2 communication error");
+      fdo2Initialized = false;
+    }
+  } else {
+    hostCom.println("⚠️ FDO2 initialization failed - check Serial2 connections\n");
+  }
+  hostCom.println();
 
   // ============================================================================
   // Initialize sensors
@@ -440,6 +493,33 @@ void loop() {
       // No ABPD detected - set to invalid indicator
       sensorData_bus0.abpd_pressure = -9.9;
       sensorData_bus0.abpd_temperature = -9.9;
+    }
+
+    // ========================================================================
+    // Read FDO2 Optical Oxygen Sensor (at GUI/Serial output rate)
+    // ========================================================================
+    static uint32_t lastFDO2Time = 0;
+    if (fdo2Initialized && (currentTime - lastFDO2Time) >= sysConfig.delta_t) {
+      lastFDO2Time = currentTime;
+      
+      // Use #MRAW for extended data (includes pressure, humidity, etc.)
+      if (fdo2Sensor.measureOxygenRaw(fdo2Data)) {
+        // Check for fatal errors
+        if (fdo2Sensor.hasFatalError(fdo2Data.status)) {
+          hostCom.printf("⚠️ FDO2 Fatal Error: %s\n", 
+                         fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+        }
+        // Optionally log warnings in verbose mode
+        else if (sysConfig.quiet_mode == 0 && fdo2Sensor.hasWarning(fdo2Data.status)) {
+          hostCom.printf("⚠️ FDO2 Warning: %s\n", 
+                         fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+        }
+      } else {
+        if (sysConfig.quiet_mode == 0) {
+          hostCom.printf("⚠️ FDO2 Read Error: %s\n", 
+                         fdo2Sensor.getLastErrorString().c_str());
+        }
+      }
     }
 
     // ========================================================================
