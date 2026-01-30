@@ -25,6 +25,7 @@
 #define hostCom Serial // Use Serial for host communication
 
 #define SET_UI_UPDATE_TIME 100000 // 100ms in [us] for UI update time
+#define FDO2_SAMPLE_TIME_US 500000 // 500ms in [us] = 2Hz sample rate for FDO2 O2 sensor
 #define PMIXERSSID "ParallelMixer" // WiFi SSID for the Parallel Mixer
 #define PMIXERPWD "" // WiFi Password for the Parallel Mixer
 

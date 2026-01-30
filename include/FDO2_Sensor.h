@@ -52,9 +52,14 @@ public:
     bool getUniqueId(uint64_t& id);
     bool indicateLogo();  // Flash LED 4 times for identification
     
-    // Measurement commands
+    // Measurement commands (blocking)
     bool measureOxygen(MeasurementData& data);
     bool measureOxygenRaw(MeasurementData& data);  // Includes extended raw data
+
+    // Asynchronous measurement (non-blocking) - use this in main loop
+    bool startMeasurementAsync(bool includeRaw = true);  // Start async measurement
+    bool isResponseReady();                               // Check if response received (non-blocking)
+    bool getAsyncResult(MeasurementData& data);          // Parse result if ready
     
     // Calibration commands (WARNING: These consume flash cycles!)
     bool calibrateZeroOxygen();           // Calibrate at 0% O2
@@ -89,6 +94,12 @@ private:
     uint32_t _timeout;
     int16_t _lastError;
     bool _crcEnabled;
+
+    // Async state tracking
+    String _asyncResponse;
+    bool _asyncPending;
+    bool _asyncIncludeRaw;
+    uint32_t _asyncStartTime;
     
     // Command sending and response parsing
     bool sendCommand(const String& cmd);

@@ -67,11 +67,12 @@ void CommandParser::printHelp() {
   Serial.println("-------------------");
   Serial.println("T for GUI/serial output interval [us] int");
   Serial.println("X for control system execution interval [us] int");
-  Serial.println("Q = 0 verbose, Q = 1 quiet");
+  Serial.println("Q = 0 verbose, Q = 1 quiet, Q = 2 debug");
   Serial.println("Q = 3 special (mode+actuator), Q = 4 abbreviated");
-  Serial.println("Q = 5 outputs Flow, SupplyP, Air");
-  Serial.println("Q = 6 outputs Bus0/Bus1 SFM3505 data");
-  Serial.println("Q = 7 high-speed TSV (SupplyP, Air, Valve, Current)");
+  Serial.println("Q = 5 Flow/SupplyP/Air");
+  Serial.println("Q = 6 dual bus + all (time,P,T,Bus0,Bus1,V,I,O2)");
+  Serial.println("Q = 7 high-speed TSV (time,P,T,Air,Valve,I,O2)");
+  Serial.println("Q = 8 FDO2 O2 data, Q = 9 FDO2 extended/raw");
   Serial.println("Verbose data: dP, Flow, SupplyP, Fused Flow");
   Serial.println("Z zeroes controller integrator");
   Serial.println("E selects Ext (1 default) 12 bit / Int (0) 10 bit PWM");
@@ -188,7 +189,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
     case 'Q': case 'q':  // Quiet mode
       if (params.length() > 0) {
         config.quiet_mode = params.toInt();
-        if (config.quiet_mode > 7) config.quiet_mode = 1;  // Now supports 0-7
+        if (config.quiet_mode > 9) config.quiet_mode = 1;  // Supports 0-9
         Serial.print("Q= ");
         Serial.print(config.quiet_mode);
         sendOK();

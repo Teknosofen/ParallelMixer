@@ -38,7 +38,7 @@ M2          Select channel 2 - O2Valve
 M3          Select channel 3 - ExpValve (Expiratory valve)
 M4          Select channel 4 - NC (Not Connected/Reserved)
 M5          Select channel 5 - Blower
-M           Query current channel
+M           Query current channelgit pull
 ```
 
 **Protocol:**
@@ -169,7 +169,7 @@ X           Query current interval
 
 ## Output Mode (`Q`)
 
-Set serial output verbosity.
+Set serial output verbosity (Q0-Q9).
 ```
 Q0          Verbose: Pressure, Temp, Air flow, Valve
 Q1          Quiet: No output
@@ -177,8 +177,10 @@ Q2          Debug: Integrator, Error, Valve, Flow
 Q3          Special: Mode + MUX channel + Actuator data
 Q4          Abbreviated: dP, Flow, Valve
 Q5          Flow, SupplyP, Air
-Q6          Bus0/Bus1 SFM3505 data
-Q7          High-speed TSV (Time_ms, SupplyP, LowP, Temp, Air, Valve, Current)
+Q6          Full TSV (Time_ms, SupplyP, LowP, Temp, Bus0_O2, Bus0_Air, Bus1_O2, Bus1_Air, Valve, Current, FDO2_hPa, FDO2_%)
+Q7          High-speed TSV (Time_ms, SupplyP, LowP, Temp, Air, Valve, Current, O2_hPa, O2%)
+Q8          FDO2 O2 sensor data (pO2, O2%, Temp, Status)
+Q9          FDO2 extended/raw data (Phase, Signal, Ambient, Pressure, RH)
 ```
 
 ---

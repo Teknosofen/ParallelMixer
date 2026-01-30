@@ -1,8 +1,8 @@
 /*
  * T-Display S3 Pin Configuration for Dual I2C + Dual Serial
  * 
- * This file defines all the pins needed for your P-Mixer project
- * with two I2C buses and two Serial ports.
+ * This file defines all the pins needed for the P-Mixer project
+ * with two I2C buses and possibly two Serial ports.
  */
 
 #ifndef PIN_CONFIG_H
@@ -29,7 +29,7 @@
 // SERIAL PORT PINS - For external microcontroller communication
 // ============================================================================
 
-// Serial1 - First external microcontroller (hardware UART1)
+// Serial1 - First external microcontroller and data to serial MUX (hardware UART1)
 #define SERIAL1_TX_PIN 17
 #define SERIAL1_RX_PIN 18
 
@@ -73,8 +73,6 @@ STILL AVAILABLE:
 
 NOTES:
 - GPIO43/44 also used for Serial when USB CDC is off
-- All pins are 3.3V logic level
-- Pull-up resistors needed for I2C (4.7kΩ typical)
 */
 
 // ============================================================================
@@ -82,7 +80,7 @@ NOTES:
 // ============================================================================
 
 /*
-If you don't need Serial2, you can free up GPIO12/13:
+If we don't need Serial2, we can free up GPIO12/13:
 
 OPTION A: Use GPIO12/13 for other purposes (current configuration)
 #define I2C0_SDA_PIN 43

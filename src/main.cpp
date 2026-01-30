@@ -177,34 +177,50 @@ void outputData() {
                      sensorData_bus0.sfm3505_air_flow);
       break;
 
-    case 6:  // SFM3505 data from both buses
-      hostCom.printf("[Bus0] O2: %.3f Air: %.3f | [Bus1] O2: %.3f Air: %.3f\n",
-                     sensorData_bus0.sfm3505_o2_flow,
-                     sensorData_bus0.sfm3505_air_flow,
-                     sensorData_bus1.sfm3505_o2_flow,
-                     sensorData_bus1.sfm3505_air_flow);
+    // Combined output: Time_ms, SupplyP, LowP, Temp, Bus0_O2, Bus0_Air, Bus1_O2, Bus1_Air, Valve%, Current, FDO2_hPa, FDO2_%
+    case 6:  // SFM3505 dual bus + Q7 data (tab-separated)
+      {
+        float localValveCtrl = actuator.getValveControlSignal();
+        float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
+        float o2_hPa = fdo2Initialized ? fdo2Data.oxygenPartialPressure_hPa : -9.9f;
+        float o2_percent = fdo2Initialized ?
+          fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
+        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.3f\t%.3f\t%.3f\t%.2f\t%.3f\t%.2f\t%.2f\n",
+                       millis(),
+                       sensorData_bus0.supply_pressure,
+                       sensorData_bus0.abpd_pressure,
+                       sensorData_bus0.abpd_temperature,
+                       sensorData_bus0.sfm3505_o2_flow,
+                       sensorData_bus0.sfm3505_air_flow,
+                       sensorData_bus1.sfm3505_o2_flow,
+                       sensorData_bus1.sfm3505_air_flow,
+                       localValveCtrl,
+                       actuatorCurrent,
+                       o2_hPa,
+                       o2_percent);
+      }
       break;
 
-    // Supply Pressure (kPa, 2 decimals)
-    // Low Pressure (kPa, 2 decimals)
-    // Temperature (°C, 1 decimal)
-    // Air Flow (L/min, 3 decimals)
-    // Valve Control Signal (%, 2 decimals)
-    // Actuator Current (A, 3 decimals)
+    // High-speed TSV: Time_ms, SupplyP, LowP, Temp, AirFlow, Valve%, Current, O2_hPa, O2%
     case 7:  // High-speed data logging: tab-separated, no labels (minimal bandwidth)
       {
         float localValveCtrl = actuator.getValveControlSignal();
         float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
-        // Format: Timestamp_ms\tSupplyPressure\tLowPressure\tTemp\tAirFlow\tValveSignal\tCurrent\n
-        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.2f\t%.3f\n",
+        float o2_hPa = fdo2Initialized ? fdo2Data.oxygenPartialPressure_hPa : -9.9f;
+        float o2_percent = fdo2Initialized ?
+          fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
+        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.2f\t%.3f\t%.2f\t%.2f\n",
                        millis(),
                        sensorData_bus0.supply_pressure,
                        sensorData_bus0.abpd_pressure,
                        sensorData_bus0.abpd_temperature,
                        sensorData_bus0.sfm3505_air_flow,
                        localValveCtrl,
-                       actuatorCurrent);
+                       actuatorCurrent,
+                       o2_hPa,
+                       o2_percent);
       }
+      break;
 
     case 8:  // FDO2 Oxygen Sensor data
       if (fdo2Initialized) {
@@ -233,7 +249,6 @@ void outputData() {
       } else {
         hostCom.println("FDO2 not initialized");
       }
-      break;
       break;
   }
 }
@@ -496,28 +511,39 @@ void loop() {
     }
 
     // ========================================================================
-    // Read FDO2 Optical Oxygen Sensor (at GUI/Serial output rate)
+    // Read FDO2 Optical Oxygen Sensor - ASYNC (non-blocking)
+    // Sample rate: FDO2_SAMPLE_TIME_US (default 500ms = 2Hz, set in main.hpp)
+    // State machine: START -> WAIT_RESPONSE -> PROCESS -> IDLE -> START...
     // ========================================================================
-    static uint32_t lastFDO2Time = 0;
-    if (fdo2Initialized && (currentTime - lastFDO2Time) >= sysConfig.delta_t) {
-      lastFDO2Time = currentTime;
-      
-      // Use #MRAW for extended data (includes pressure, humidity, etc.)
-      if (fdo2Sensor.measureOxygenRaw(fdo2Data)) {
-        // Check for fatal errors
-        if (fdo2Sensor.hasFatalError(fdo2Data.status)) {
-          hostCom.printf("⚠️ FDO2 Fatal Error: %s\n", 
-                         fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+    static uint32_t lastFDO2StartTime = 0;
+    static bool fdo2MeasurementPending = false;
+
+    if (fdo2Initialized) {
+      // Check if response is ready (non-blocking)
+      if (fdo2MeasurementPending && fdo2Sensor.isResponseReady()) {
+        // Parse the result
+        if (fdo2Sensor.getAsyncResult(fdo2Data)) {
+          // Check for fatal errors
+          if (fdo2Sensor.hasFatalError(fdo2Data.status)) {
+            if (sysConfig.quiet_mode == 0) {
+              hostCom.printf("⚠️ FDO2 Fatal Error: %s\n",
+                             fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+            }
+          }
+          // Optionally log warnings in verbose mode
+          else if (sysConfig.quiet_mode == 0 && fdo2Sensor.hasWarning(fdo2Data.status)) {
+            hostCom.printf("⚠️ FDO2 Warning: %s\n",
+                           fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+          }
         }
-        // Optionally log warnings in verbose mode
-        else if (sysConfig.quiet_mode == 0 && fdo2Sensor.hasWarning(fdo2Data.status)) {
-          hostCom.printf("⚠️ FDO2 Warning: %s\n", 
-                         fdo2Sensor.getStatusString(fdo2Data.status).c_str());
-        }
-      } else {
-        if (sysConfig.quiet_mode == 0) {
-          hostCom.printf("⚠️ FDO2 Read Error: %s\n", 
-                         fdo2Sensor.getLastErrorString().c_str());
+        fdo2MeasurementPending = false;
+      }
+
+      // Start new measurement at FDO2_SAMPLE_TIME_US intervals (if not already pending)
+      if (!fdo2MeasurementPending && (currentTime - lastFDO2StartTime) >= FDO2_SAMPLE_TIME_US) {
+        lastFDO2StartTime = currentTime;
+        if (fdo2Sensor.startMeasurementAsync(true)) {  // true = include raw data
+          fdo2MeasurementPending = true;
         }
       }
     }

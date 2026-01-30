@@ -1,7 +1,8 @@
 #include "FDO2_Sensor.h"
 
-FDO2_Sensor::FDO2_Sensor(HardwareSerial& serial) 
-    : _serial(serial), _timeout(2000), _lastError(0), _crcEnabled(false) {
+FDO2_Sensor::FDO2_Sensor(HardwareSerial& serial)
+    : _serial(serial), _timeout(2000), _lastError(0), _crcEnabled(false),
+      _asyncPending(false), _asyncIncludeRaw(true), _asyncStartTime(0) {
 }
 
 bool FDO2_Sensor::begin(uint32_t baudRate, int8_t rxPin, int8_t txPin) {
@@ -63,11 +64,79 @@ bool FDO2_Sensor::measureOxygen(MeasurementData& data) {
 
 bool FDO2_Sensor::measureOxygenRaw(MeasurementData& data) {
     if (!sendCommand("#MRAW")) return false;
-    
+
     String response;
     if (!waitForResponse(response)) return false;
-    
+
     return parseMeasurement(response, data, true);
+}
+
+// ============================================================================
+// Asynchronous Measurement Methods (Non-blocking)
+// ============================================================================
+
+bool FDO2_Sensor::startMeasurementAsync(bool includeRaw) {
+    // Don't start if already pending
+    if (_asyncPending) return false;
+
+    clearSerialBuffer();
+
+    String cmd = includeRaw ? "#MRAW" : "#MOXY";
+    _serial.print(cmd);
+    _serial.print('\r');
+
+    _asyncPending = true;
+    _asyncIncludeRaw = includeRaw;
+    _asyncResponse = "";
+    _asyncStartTime = millis();
+
+    return true;
+}
+
+bool FDO2_Sensor::isResponseReady() {
+    if (!_asyncPending) return false;
+
+    // Check for timeout
+    if (millis() - _asyncStartTime > _timeout) {
+        _asyncPending = false;
+        _lastError = -22;  // Timeout
+        return false;
+    }
+
+    // Read available characters (non-blocking)
+    while (_serial.available()) {
+        char c = _serial.read();
+
+        if (c == '\r') {
+            // End of response - response is ready
+            return true;
+        }
+
+        _asyncResponse += c;
+
+        // Prevent buffer overflow
+        if (_asyncResponse.length() > 512) {
+            _asyncPending = false;
+            _lastError = -22;
+            return false;
+        }
+    }
+
+    return false;  // Not yet complete
+}
+
+bool FDO2_Sensor::getAsyncResult(MeasurementData& data) {
+    if (!_asyncPending) return false;
+
+    // Mark as no longer pending
+    _asyncPending = false;
+
+    // Verify CRC if enabled
+    if (_crcEnabled && !verifyCRC(_asyncResponse)) {
+        return false;
+    }
+
+    return parseMeasurement(_asyncResponse, data, _asyncIncludeRaw);
 }
 
 bool FDO2_Sensor::calibrateZeroOxygen() {
