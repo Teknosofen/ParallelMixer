@@ -393,8 +393,8 @@ String PMixerWiFiServer::generateHtmlPage() {
         </div>
         
         <div class="button-container">
-            <button onclick="saveDataToTxt()">💾 Save Data</button>
-            <button onclick="clearData()">🗑️ Clear Graph</button>
+            <button onclick="saveDataToTxt()">Save Data</button>
+            <button onclick="clearData()">Clear Graph</button>
         </div>
     </div>
 

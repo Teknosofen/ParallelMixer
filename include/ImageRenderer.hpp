@@ -33,6 +33,7 @@ public:
     void drawPressure(const String& pressure);
     void drawValveCtrlSignal(const String& signal);
     void drawCurrent(const String& current);
+    void drawO2(const String& o2);
 
     // Image drawing
     void drawImage(int x, int y, int w, int h, const uint16_t* img);
@@ -60,6 +61,7 @@ public:
     DisplayPos statusPressurePos;
     DisplayPos statusValveCtrlSignalPos;
     DisplayPos statusCurrentPos;
+    DisplayPos statusO2Pos;
 
 private:
     TFT_eSPI &tft;

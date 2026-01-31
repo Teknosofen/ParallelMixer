@@ -47,8 +47,8 @@ struct ControlState {
 
 class ActuatorControl {
 public:
-  ActuatorControl(uint8_t valve_ctrl_pin);
-  
+  ActuatorControl();
+
   void initialize();
   
   // Control mode management
@@ -111,7 +111,6 @@ public:
   void execute(float flow_reference, float flow_measured, int quiet_mode);
   
 private:
-  uint8_t _valve_ctrl_pin;
   ControllerMode _controller_mode;
   bool _external_pwm;
 

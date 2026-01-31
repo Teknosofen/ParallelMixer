@@ -2,9 +2,8 @@
 #include "SerialMuxRouter.hpp"
 #include "math.h"
 
-ActuatorControl::ActuatorControl(uint8_t valve_ctrl_pin)
-  : _valve_ctrl_pin(valve_ctrl_pin),
-    _controller_mode(VALVE_SET_VALUE_CONTROL),
+ActuatorControl::ActuatorControl()
+  : _controller_mode(VALVE_SET_VALUE_CONTROL),
     _external_pwm(true),
     _index_in_period(0),
     _period_start_time_us(0),
@@ -328,16 +327,6 @@ void ActuatorControl::outputToValve(float signal_percent) {
   char actuatorCMD = 'V';
   sendSerialCommand(actuatorCMD, signal_percent);
   _last_sent_valve_signal = signal_percent;
-  // Serial.println("valve CMD " + String(signal_percent) + "% " + String(millis()));
-
-  // Legacy hardware output (commented out - now using serial actuator)
-  // Convert percentage to hardware units only for legacy hardware
-  // uint16_t hardware_signal = percentToHardware(signal_percent);
-  // if (_external_pwm) {
-  //   analogOutMCP4725(hardware_signal);
-  // } else {
-  //   analogWrite(_valve_ctrl_pin, hardware_signal);
-  // }
 }
 
 void ActuatorControl::analogOutMCP4725(uint16_t dac_output) {

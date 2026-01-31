@@ -6,7 +6,7 @@ ImageRenderer::ImageRenderer(TFT_eSPI &display) : tft(display) {}
 
 void ImageRenderer::begin() {
     tft.init();
-    tft.setRotation(3);
+    tft.setRotation(0);  // Portrait mode (170x320)
     tft.fillScreen(TFT_LOGOBACKGROUND);
     tft.setTextColor(TFT_WHITE, TFT_LOGOBACKGROUND);
     tft.setTextSize(defaultTextSize);
@@ -123,31 +123,28 @@ void ImageRenderer::pushFullImage(int x, int y, int w, int h, const uint16_t* im
 }
 
 void ImageRenderer::drawLabel() {
-    tft.setFreeFont(FSSB18);    
-    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND); // Set text color and background
-    tft.setTextSize(1); // Set text size
-    // tft.setCursor(labelPos.x, labelPos.y); // Set cursor position
-    tft.drawString("ParallellMixer", labelPos.x, labelPos.y); // Print a message on the display
-    // tft.setCursor(versionPos.x, versionPos.y); // Set cursor position for next line
-    tft.setFreeFont(FSS9); 
-    // tft.setTextSize(smallTextSize); // Set text size for the next line
-    tft.drawString(VERSION, versionPos.x, versionPos.y, 2); // Print version on the display
+    tft.setFreeFont(FSSB12);  // Smaller font for portrait header
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    tft.setTextSize(1);
+    tft.drawString("P-Mixer", labelPos.x, labelPos.y);
+    tft.setFreeFont(FSS9);
+    tft.drawString(VERSION, versionPos.x, versionPos.y, 2);
 }
 
 void ImageRenderer::drawWiFiField() {
-    tft.setFreeFont(FSS9);   
+    tft.setFreeFont(FSS9);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(wiFiRectPos.x, wiFiRectPos.y, 130, 70, 10, TFT_WHITE); // White border around the screen
-    tft.drawString("WiFi  ", wiFiLabelPos.x, wiFiLabelPos.y); // Print a message on the display  
+    tft.drawRoundRect(wiFiRectPos.x, wiFiRectPos.y, 160, 70, 10, TFT_WHITE);
+    tft.drawString("WiFi", wiFiLabelPos.x, wiFiLabelPos.y);
 }
 
 void ImageRenderer::drawStatusField() {
     tft.setFreeFont(FSS9);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 175, 120, 10, TFT_WHITE); // White border (increased height for current)
-    tft.drawString("Status  ", statusLabelPos.x, statusLabelPos.y); // Print a message on the display
+    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 140, 10, TFT_WHITE);
+    tft.drawString("Status", statusLabelPos.x, statusLabelPos.y);
 }
 
 void ImageRenderer::drawWiFiAPIP(String WiFiAPIP, String wiFiSSID) {
@@ -257,30 +254,31 @@ void ImageRenderer::drawCurrent(const String& current) {
     oldCurrent = current;
 }
 
+void ImageRenderer::drawO2(const String& o2) {
+    static String oldO2 = "0.0";
+    // Clear previous text by drawing background rectangle
+    tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+    tft.setFreeFont(FSS9);
+    tft.drawString("pO2: " + oldO2, statusO2Pos.x, statusO2Pos.y, 2);
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    tft.setTextSize(1);
+    // Draw the O2 string
+    tft.drawString("pO2: " + o2, statusO2Pos.x, statusO2Pos.y, 2);
+    oldO2 = o2;
+}
+
 void ImageRenderer::initPositions() {
+    // Portrait layout (170x320)
+    // Header at top
     labelPos.x = 10;
-    labelPos.y = 10;
+    labelPos.y = 5;
 
-    versionPos.x = 285;
-    versionPos.y = 25;
+    versionPos.x = 110;
+    versionPos.y = 12;
 
-    wiFiRectPos.x = 5;
-    wiFiRectPos.y = 100;
-
-    wiFiLabelPos.x = wiFiRectPos.x + 5;
-    wiFiLabelPos.y = wiFiRectPos.y - 10;
-
-    wiFiAPIPPos.x = wiFiLabelPos.x;
-    wiFiAPIPPos.y = wiFiLabelPos.y + 20;
-
-    wiFiSSIDPos.x = wiFiLabelPos.x;
-    wiFiSSIDPos.y = wiFiLabelPos.y + 20 + 20;
-
-    wiFiPromptPos.x = wiFiLabelPos.x;
-    wiFiPromptPos.y = wiFiLabelPos.y + 20 + 20 + 20;
-
-    statusRectPos.x = 140;
-    statusRectPos.y = 50;
+    // Status section in middle
+    statusRectPos.x = 5;
+    statusRectPos.y = 40;
 
     statusLabelPos.x = statusRectPos.x + 5;
     statusLabelPos.y = statusRectPos.y - 10;
@@ -299,4 +297,23 @@ void ImageRenderer::initPositions() {
 
     statusCurrentPos.x = statusLabelPos.x;
     statusCurrentPos.y = statusLabelPos.y + 100;
+
+    statusO2Pos.x = statusLabelPos.x;
+    statusO2Pos.y = statusLabelPos.y + 120;
+
+    // WiFi section at bottom
+    wiFiRectPos.x = 5;
+    wiFiRectPos.y = 240;
+
+    wiFiLabelPos.x = wiFiRectPos.x + 5;
+    wiFiLabelPos.y = wiFiRectPos.y - 10;
+
+    wiFiAPIPPos.x = wiFiLabelPos.x;
+    wiFiAPIPPos.y = wiFiLabelPos.y + 20;
+
+    wiFiSSIDPos.x = wiFiLabelPos.x;
+    wiFiSSIDPos.y = wiFiLabelPos.y + 40;
+
+    wiFiPromptPos.x = wiFiLabelPos.x;
+    wiFiPromptPos.y = wiFiLabelPos.y + 60;
 }

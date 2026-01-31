@@ -17,7 +17,7 @@
 #include "FDO2_Sensor.h"
 
 // ---------------------------------
-// logo BMP file as well as factory default config files are stored in SPIFFS
+// logo BMP file as well as factory default config files arcan be stored in SPIFFS
 // to send to device run:
 // pio run --target uploadfs
 //
@@ -47,10 +47,7 @@ SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505
 // Note: Pin parameter unused - all valve control via serial MUX commands
 // Channels: 0 = direct (no prefix), 1-5 = MUX channels with prefix
 static const uint8_t NUM_MUX_CHANNELS = 6;
-ActuatorControl actuators[NUM_MUX_CHANNELS] = {
-  ActuatorControl(0), ActuatorControl(0), ActuatorControl(0),
-  ActuatorControl(0), ActuatorControl(0), ActuatorControl(0)
-};
+ActuatorControl actuators[NUM_MUX_CHANNELS];
 // Reference to currently selected actuator (for command interface)
 #define actuator actuators[sysConfig.mux_channel]
 
@@ -675,6 +672,12 @@ void loop() {
     renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
     // Show current from selected MUX channel
     renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
+    // Show O2 partial pressure from FDO2 sensor
+    if (fdo2Initialized) {
+      renderer.drawO2(String(fdo2Data.oxygenPartialPressure_hPa, 1) + " hPa");
+    } else {
+      renderer.drawO2("N/A");
+    }
   }
 
   // ============================================================================
