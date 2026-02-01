@@ -15,6 +15,7 @@
 #include "PMixerWiFiServer.hpp"
 #include "SerialMuxRouter.hpp"
 #include "FDO2_Sensor.h"
+#include "VentilatorController.hpp"
 
 // ---------------------------------
 // logo BMP file as well as factory default config files arcan be stored in SPIFFS
@@ -53,6 +54,7 @@ ActuatorControl actuators[NUM_MUX_CHANNELS];
 
 CommandParser parser;
 SerialMuxRouter muxRouter(&Serial1);
+VentilatorController ventilator;
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
 PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
@@ -409,6 +411,10 @@ void setup() {
   }
   hostCom.printf("Initialized %d MUX channels for parallel operation\n", NUM_MUX_CHANNELS);
 
+  // Initialize ventilator controller (HLC)
+  ventilator.begin(&muxRouter);
+  hostCom.println("Ventilator HLC initialized (use VS for status, VO1 to start)");
+
   past_time = micros();
   control_past_time = micros();
 
@@ -546,13 +552,49 @@ void loop() {
     }
 
     // ========================================================================
-    // Execute control for ALL MUX channels in parallel
+    // Ventilator HLC Update (if running)
+    // ========================================================================
+    if (ventilator.isRunning()) {
+      // Gather measurements for ventilator
+      VentilatorMeasurements ventMeas;
+      ventMeas.airwayPressure_mbar = sensorData_bus0.abpd_pressure;
+      ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow;
+      ventMeas.expFlow_slm = 0;  // TODO: Add expiratory flow sensor if available
+      ventMeas.deliveredO2_percent = fdo2Initialized ?
+        fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : 21.0f;
+
+      // Update ventilator state machine
+      ventilator.update(ventMeas, currentTime);
+
+      // Apply ventilator outputs to actuators (MUX channels 1-3)
+      VentilatorOutputs ventOut = ventilator.getOutputs();
+
+      // Channel 1: Air valve - flow setpoint
+      muxRouter.sendSetFlow(MUX_AIR_VALVE, ventOut.airValveFlow_slm);
+
+      // Channel 2: O2 valve - flow setpoint
+      muxRouter.sendSetFlow(MUX_O2_VALVE, ventOut.o2ValveFlow_slm);
+
+      // Channel 3: Exp valve - pressure or position control
+      if (ventOut.expValveClosed) {
+        muxRouter.sendCommand(MUX_EXP_VALVE, 'V', 0);  // Close valve
+      } else if (ventOut.expValveAsPressure) {
+        muxRouter.sendSetPressure(MUX_EXP_VALVE, ventOut.expValveSetpoint);
+      } else {
+        muxRouter.sendCommand(MUX_EXP_VALVE, 'V', ventOut.expValveSetpoint);
+      }
+    }
+
+    // ========================================================================
+    // Execute control for ALL MUX channels in parallel (when ventilator not running)
     // Each channel runs its own signal generator independently
     // ========================================================================
-    for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
-      // Note: For now, all channels share the same flow reference and sensor data
-      // In future, each channel could have independent references
-      actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+    if (!ventilator.isRunning()) {
+      for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
+        // Note: For now, all channels share the same flow reference and sensor data
+        // In future, each channel could have independent references
+        actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+      }
     }
 
     // ========================================================================
@@ -616,7 +658,11 @@ void loop() {
   // ============================================================================
 
   parser.update();
-  parser.processCommands(sysConfig, actuator);
+  // Try ventilator commands first (two-character commands)
+  if (!parser.processVentilatorCommands(ventilator)) {
+    // If not a ventilator command, try regular commands
+    parser.processCommands(sysConfig, actuator);
+  }
 
   // Handle MUX channel change - switch to different actuator instance
   static uint8_t lastMuxChannel = 0;

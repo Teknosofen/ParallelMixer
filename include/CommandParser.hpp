@@ -5,6 +5,7 @@
 
 // Forward declarations
 class ActuatorControl;
+class VentilatorController;
 
 // MUX channel definitions
 enum MuxChannel : uint8_t {
@@ -48,6 +49,9 @@ public:
   
   // Main command processing - pass in system objects
   void processCommands(SystemConfig& config, ActuatorControl& actuator);
+
+  // Ventilator command processing - returns true if command was handled
+  bool processVentilatorCommands(VentilatorController& ventilator);
   
   // Command handlers - these return true if command was handled
   typedef bool (*CommandCallback)(char cmd, const String& params, void* context);

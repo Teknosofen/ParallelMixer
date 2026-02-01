@@ -1,5 +1,6 @@
 #include "CommandParser.hpp"
 #include "ActuatorControl.hpp"
+#include "VentilatorController.hpp"
 
 CommandParser::CommandParser() 
   : _command_complete(false), _context(nullptr) {
@@ -452,4 +453,257 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
       sendError();
       break;
   }
+}
+
+// ============================================================================
+// Ventilator Command Processing (two-character commands)
+// ============================================================================
+bool CommandParser::processVentilatorCommands(VentilatorController& ventilator) {
+  if (!_command_complete) {
+    return false;
+  }
+
+  String cmdStr = _command_str;
+  cmdStr.trim();
+
+  if (cmdStr.length() < 2) {
+    return false;  // Not a two-character command
+  }
+
+  // Extract two-character command and value
+  String cmd = cmdStr.substring(0, 2);
+  cmd.toUpperCase();
+  String params = cmdStr.substring(2);
+  params.trim();
+
+  VentilatorConfig cfg = ventilator.getConfig();
+  bool handled = true;
+  bool hasValue = (params.length() > 0);
+
+  // Control commands
+  if (cmd == "VO") {
+    if (hasValue) {
+      if (params.toInt() != 0) {
+        ventilator.start();
+        Serial.println("Ventilator ON");
+      } else {
+        ventilator.stop();
+        Serial.println("Ventilator OFF");
+      }
+    } else {
+      Serial.printf("VO=%d\n", ventilator.isRunning() ? 1 : 0);
+    }
+  }
+  else if (cmd == "VS") {
+    // Status query
+    VentilatorStatus st = ventilator.getStatus();
+    Serial.printf("Vent: %s  State: %s\n",
+                  ventilator.isRunning() ? "ON" : "OFF",
+                  ventilator.getStateString());
+    Serial.printf("RR=%.1f VT=%.0f IE=%.2f FI=%.0f%%\n",
+                  cfg.respRate, cfg.tidalVolume_mL, cfg.ieRatio, cfg.targetFiO2 * 100);
+    Serial.printf("PI=%.1f PE=%.1f MF=%.1f\n",
+                  cfg.maxPressure_mbar, cfg.peep_mbar, cfg.maxInspFlow_slm);
+    if (ventilator.isRunning()) {
+      Serial.printf("#=%lu PkP=%.1f Vt=%.0fmL\n",
+                    st.breathCount, st.peakPressure_mbar, st.measuredVt_mL);
+    }
+  }
+  // Timing commands
+  else if (cmd == "RR") {
+    if (hasValue) {
+      ventilator.setRespRate(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("RR=%.1f\n", cfg.respRate);
+    }
+  }
+  else if (cmd == "IE") {
+    if (hasValue) {
+      ventilator.setIERatio(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("IE=%.2f\n", cfg.ieRatio);
+    }
+  }
+  else if (cmd == "IP") {
+    if (hasValue) {
+      ventilator.setInspPauseFraction(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("IP=%.2f\n", cfg.inspPauseFraction);
+    }
+  }
+  else if (cmd == "I1") {
+    if (hasValue) {
+      ventilator.setInsp1Fraction(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("I1=%.2f\n", cfg.insp1Fraction);
+    }
+  }
+  else if (cmd == "I2") {
+    if (hasValue) {
+      ventilator.setInsp2Fraction(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("I2=%.2f\n", cfg.insp2Fraction);
+    }
+  }
+  else if (cmd == "EN") {
+    if (hasValue) {
+      ventilator.setExpNonTrigFraction(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("EN=%.2f\n", cfg.expNonTrigFraction);
+    }
+  }
+  else if (cmd == "ES") {
+    if (hasValue) {
+      ventilator.setExpSyncFraction(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("ES=%.2f\n", cfg.expSyncFraction);
+    }
+  }
+  // Volume/Flow commands
+  else if (cmd == "VT") {
+    if (hasValue) {
+      ventilator.setTidalVolume(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("VT=%.0f\n", cfg.tidalVolume_mL);
+    }
+  }
+  else if (cmd == "MF") {
+    if (hasValue) {
+      ventilator.setMaxFlow(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("MF=%.1f\n", cfg.maxInspFlow_slm);
+    }
+  }
+  else if (cmd == "TF") {
+    if (hasValue) {
+      ventilator.setTotalFlow(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("TF=%.1f\n", cfg.totalFlow_slm);
+    }
+  }
+  else if (cmd == "VC") {
+    if (hasValue) {
+      ventilator.setUseVolumeControl(params.toInt() != 0);
+      sendOK();
+    } else {
+      Serial.printf("VC=%d\n", cfg.useVolumeControl ? 1 : 0);
+    }
+  }
+  // Pressure commands
+  else if (cmd == "PI") {
+    if (hasValue) {
+      ventilator.setMaxPressure(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("PI=%.1f\n", cfg.maxPressure_mbar);
+    }
+  }
+  else if (cmd == "PE") {
+    if (hasValue) {
+      ventilator.setPEEP(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("PE=%.1f\n", cfg.peep_mbar);
+    }
+  }
+  else if (cmd == "PR") {
+    if (hasValue) {
+      ventilator.setPressureRampTime(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("PR=%.0f\n", cfg.pressureRampTime_ms);
+    }
+  }
+  // Gas command
+  else if (cmd == "FI") {
+    if (hasValue) {
+      // Input is percentage, convert to fraction
+      ventilator.setFiO2(params.toFloat() / 100.0f);
+      sendOK();
+    } else {
+      Serial.printf("FI=%.0f%%\n", cfg.targetFiO2 * 100);
+    }
+  }
+  // Trigger commands
+  else if (cmd == "TE") {
+    if (hasValue) {
+      ventilator.setTriggerEnabled(params.toInt() != 0);
+      sendOK();
+    } else {
+      Serial.printf("TE=%d\n", cfg.triggerEnabled ? 1 : 0);
+    }
+  }
+  else if (cmd == "BF") {
+    if (hasValue) {
+      ventilator.setBiasFlow(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("BF=%.1f\n", cfg.biasFlow_slm);
+    }
+  }
+  else if (cmd == "FT") {
+    if (hasValue) {
+      ventilator.setFlowTrigger(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("FT=%.1f\n", cfg.flowTrigger_slm);
+    }
+  }
+  else if (cmd == "PT") {
+    if (hasValue) {
+      ventilator.setPressureTrigger(params.toFloat());
+      sendOK();
+    } else {
+      Serial.printf("PT=%.1f\n", cfg.pressureTrigger_mbar);
+    }
+  }
+  // Alarm commands
+  else if (cmd == "AH") {
+    if (hasValue) {
+      cfg.highPressureAlarm_mbar = params.toFloat();
+      ventilator.setConfig(cfg);
+      sendOK();
+    } else {
+      Serial.printf("AH=%.1f\n", cfg.highPressureAlarm_mbar);
+    }
+  }
+  else if (cmd == "AL") {
+    if (hasValue) {
+      cfg.lowPressureAlarm_mbar = params.toFloat();
+      ventilator.setConfig(cfg);
+      sendOK();
+    } else {
+      Serial.printf("AL=%.1f\n", cfg.lowPressureAlarm_mbar);
+    }
+  }
+  else if (cmd == "AA") {
+    if (hasValue) {
+      cfg.apneaTime_s = params.toFloat();
+      ventilator.setConfig(cfg);
+      sendOK();
+    } else {
+      Serial.printf("AA=%.1f\n", cfg.apneaTime_s);
+    }
+  }
+  else {
+    handled = false;  // Not a ventilator command
+  }
+
+  if (handled) {
+    // Clear command buffer since we handled it
+    _command_str = "";
+    _command_complete = false;
+  }
+
+  return handled;
 }
