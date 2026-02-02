@@ -13,6 +13,7 @@ public:
     void initPositions();
     void showBootScreen(const char* version, const char* compileDate, const char* compileTime);
     void showLinesOnScreen(const char* line1, const char* line2, const char* line3);
+    void showVentilatorSettings(const char* line1, const char* line2, const char* line3, const char* line4);
     
     // Basic drawing
     void drawLabel();
@@ -30,6 +31,7 @@ public:
     void drawWiFiPromt(String WiFiPrompt);
     void drawControllerMode(const String& mode);
     void drawFlow(const String& flow);
+    void drawFlow2(const String& flow);  // Bus 1 flow display
     void drawPressure(const String& pressure);
     void drawValveCtrlSignal(const String& signal);
     void drawCurrent(const String& current);
@@ -58,6 +60,7 @@ public:
     DisplayPos statusLabelPos;
     DisplayPos statusControllerModePos;
     DisplayPos statusFlowPos;
+    DisplayPos statusFlow2Pos;  // Bus 1 flow position
     DisplayPos statusPressurePos;
     DisplayPos statusValveCtrlSignalPos;
     DisplayPos statusCurrentPos;

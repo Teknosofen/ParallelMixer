@@ -33,9 +33,10 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                         I2C BUS 1 (Wire1)                           │   │
 │  │    GPIO10 (SDA) ──┬── 4.7kΩ to 3.3V                                 │   │
-│  │                   ├── SFM Sensor 2 (0x40)                           │   │
-│  │                   └── Additional sensors                            │   │
+│  │                   ├── SFM3505 Flow Sensor 2 (0x2E)                  │   │
+│  │                   └── ABP2 Pressure Sensor 2 (0x28)                 │   │
 │  │    GPIO11 (SCL) ──┴── 4.7kΩ to 3.3V                                 │   │
+│  │    Clock: 1MHz (same as Bus 0)                                      │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
@@ -52,8 +53,8 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
 │  │                         USER INTERFACE                              │   │
-│  │    GPIO14 ─────── Interaction Button (WiFi On/Off toggle)          │   │
-│  │    GPIO0  ─────── Boot Button (reserved)                            │   │
+│  │    GPIO14 ─────── Key 1: Long=WiFi On, Short=WiFi Off              │   │
+│  │    GPIO0  ─────── Key 2: Long=Show Vent Settings, Short=Back       │   │
 │  │    GPIO15 ─────── Display Power Enable (set HIGH)                   │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
@@ -78,6 +79,8 @@ This document outlines the design for a ventilator/respirator function in the Pa
 | SFM3505     | I2C Bus 0 | 0x2E    | Air/O2 Flow (slm)         | 100 Hz      |
 | ABP2        | I2C Bus 0 | 0x28    | Supply Pressure (bar)     | 10-100 Hz   |
 | ABPD        | I2C Bus 0 | 0x18    | Airway Pressure (mbar)    | 10-100 Hz   |
+| SFM3505 #2  | I2C Bus 1 | 0x2E    | Air/O2 Flow (slm)         | 100 Hz      |
+| ABP2 #2     | I2C Bus 1 | 0x28    | Supply Pressure (bar)     | 10-100 Hz   |
 | FDO2        | Serial2   | -       | O2 partial pressure (hPa) | 2 Hz        |
 | MCP4725     | I2C Bus 0 | 0x60    | DAC output (legacy)       | -           |
 

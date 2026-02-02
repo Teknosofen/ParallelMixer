@@ -6,7 +6,13 @@ PMixerWiFiServer::PMixerWiFiServer(String ssid, String password)
     : _ssid(ssid), _password(password), _running(false), _maxDataPoints(100),
       _currentFlow(0.0f), _currentPressure(0.0f), _currentValveSignal(0.0f),
       _currentCurrent(0.0f), _currentLowPressure(0.0f), _currentTemperature(0.0f),
-      _currentMode("Initializing")
+      _currentFlow2(0.0f), _currentPressure2(0.0f),
+      _currentMode("Initializing"),
+      _ventRunning(false), _ventState("IDLE"),
+      _ventRespRate(12.0f), _ventTidalVolume(500.0f), _ventIERatio(0.5f),
+      _ventMaxPressure(30.0f), _ventPeep(5.0f), _ventMaxFlow(60.0f),
+      _ventTargetFiO2(0.21f), _ventBreathCount(0),
+      _ventPeakPressure(0.0f), _ventMeasuredVt(0.0f)
 {
     _timestamps.reserve(_maxDataPoints);
     _flowHistory.reserve(_maxDataPoints);
@@ -77,8 +83,35 @@ void PMixerWiFiServer::updateTemperature(float temperature) {
     _currentTemperature = temperature;
 }
 
+void PMixerWiFiServer::updateFlow2(float flow2) {
+    _currentFlow2 = flow2;
+}
+
+void PMixerWiFiServer::updatePressure2(float pressure2) {
+    _currentPressure2 = pressure2;
+}
+
 void PMixerWiFiServer::updateMode(const String& mode) {
     _currentMode = mode;
+}
+
+void PMixerWiFiServer::updateVentilatorSettings(bool running, const char* state,
+                                                 float respRate, float tidalVolume, float ieRatio,
+                                                 float maxPressure, float peep, float maxFlow,
+                                                 float targetFiO2, uint32_t breathCount,
+                                                 float peakPressure, float measuredVt) {
+    _ventRunning = running;
+    _ventState = state;
+    _ventRespRate = respRate;
+    _ventTidalVolume = tidalVolume;
+    _ventIERatio = ieRatio;
+    _ventMaxPressure = maxPressure;
+    _ventPeep = peep;
+    _ventMaxFlow = maxFlow;
+    _ventTargetFiO2 = targetFiO2;
+    _ventBreathCount = breathCount;
+    _ventPeakPressure = peakPressure;
+    _ventMeasuredVt = measuredVt;
 }
 
 void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, float current,
@@ -128,7 +161,30 @@ void PMixerWiFiServer::setupWebServer() {
     server.on("/", [this]() { handleRoot(); });
     server.on("/data", [this]() { handleData(); });
     server.on("/history", [this]() { handleHistory(); });
-    server.on("/dataBuffer", [this]() { handleDataBuffer(); });  // New endpoint for buffered data
+    server.on("/dataBuffer", [this]() { handleDataBuffer(); });
+    server.on("/ventilator", [this]() { handleVentilatorSettings(); });
+}
+
+void PMixerWiFiServer::handleVentilatorSettings() {
+    server.send(200, "application/json", generateVentilatorSettingsJson());
+}
+
+String PMixerWiFiServer::generateVentilatorSettingsJson() {
+    String json = "{";
+    json += "\"running\":" + String(_ventRunning ? "true" : "false") + ",";
+    json += "\"state\":\"" + _ventState + "\",";
+    json += "\"respRate\":" + String(_ventRespRate, 1) + ",";
+    json += "\"tidalVolume\":" + String(_ventTidalVolume, 0) + ",";
+    json += "\"ieRatio\":" + String(_ventIERatio, 2) + ",";
+    json += "\"maxPressure\":" + String(_ventMaxPressure, 1) + ",";
+    json += "\"peep\":" + String(_ventPeep, 1) + ",";
+    json += "\"maxFlow\":" + String(_ventMaxFlow, 1) + ",";
+    json += "\"targetFiO2\":" + String(_ventTargetFiO2 * 100, 0) + ",";
+    json += "\"breathCount\":" + String(_ventBreathCount) + ",";
+    json += "\"peakPressure\":" + String(_ventPeakPressure, 1) + ",";
+    json += "\"measuredVt\":" + String(_ventMeasuredVt, 0);
+    json += "}";
+    return json;
 }
 
 void PMixerWiFiServer::handleRoot() {
@@ -155,6 +211,8 @@ String PMixerWiFiServer::generateDataJson() {
     json += "\"current\":" + String(_currentCurrent, 3) + ",";
     json += "\"lowPressure\":" + String(_currentLowPressure, 2) + ",";
     json += "\"temperature\":" + String(_currentTemperature, 1) + ",";
+    json += "\"flow2\":" + String(_currentFlow2, 2) + ",";
+    json += "\"pressure2\":" + String(_currentPressure2, 2) + ",";
     json += "\"mode\":\"" + _currentMode + "\",";
     json += "\"timestamp\":" + String(millis());
     json += "}";
@@ -363,12 +421,20 @@ String PMixerWiFiServer::generateHtmlPage() {
         
         <div class="status-panel">
             <div class="status-card">
-                <div class="status-label">Flow</div>
+                <div class="status-label">Flow (Bus 0)</div>
                 <div class="status-value" id="flowValue">--</div>
             </div>
             <div class="status-card">
-                <div class="status-label">Pressure</div>
+                <div class="status-label">Flow (Bus 1)</div>
+                <div class="status-value" id="flow2Value">--</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Pressure (Bus 0)</div>
                 <div class="status-value" id="pressureValue">--</div>
+            </div>
+            <div class="status-card">
+                <div class="status-label">Pressure (Bus 1)</div>
+                <div class="status-value" id="pressure2Value">--</div>
             </div>
             <div class="status-card">
                 <div class="status-label">Low Pressure</div>
@@ -388,13 +454,77 @@ String PMixerWiFiServer::generateHtmlPage() {
             </div>
         </div>
         
-        <div class="chart-container">
-            <canvas id="dataChart"></canvas>
+        <!-- Main view: Chart -->
+        <div id="mainView">
+            <div class="chart-container">
+                <canvas id="dataChart"></canvas>
+            </div>
+
+            <div class="button-container">
+                <button onclick="saveDataToTxt()">Save Data</button>
+                <button onclick="clearData()">Clear Graph</button>
+                <button onclick="showSettings()">Ventilator Settings</button>
+            </div>
         </div>
-        
-        <div class="button-container">
-            <button onclick="saveDataToTxt()">Save Data</button>
-            <button onclick="clearData()">Clear Graph</button>
+
+        <!-- Settings view: Ventilator configuration -->
+        <div id="settingsView" style="display: none;">
+            <h2 style="text-align: center; color: #0078D7;">Ventilator Settings</h2>
+
+            <div class="status-panel">
+                <div class="status-card">
+                    <div class="status-label">Status</div>
+                    <div class="status-value" id="ventStatus">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">State</div>
+                    <div class="status-value" id="ventState">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Resp Rate (BPM)</div>
+                    <div class="status-value" id="ventRR">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Tidal Volume (mL)</div>
+                    <div class="status-value" id="ventVT">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">I:E Ratio</div>
+                    <div class="status-value" id="ventIE">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Max Pressure (mbar)</div>
+                    <div class="status-value" id="ventPI">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">PEEP (mbar)</div>
+                    <div class="status-value" id="ventPE">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Max Flow (slm)</div>
+                    <div class="status-value" id="ventMF">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Target FiO2 (%)</div>
+                    <div class="status-value" id="ventFiO2">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Breath Count</div>
+                    <div class="status-value" id="ventBreaths">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Peak Pressure (mbar)</div>
+                    <div class="status-value" id="ventPkP">--</div>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Measured Vt (mL)</div>
+                    <div class="status-value" id="ventMVt">--</div>
+                </div>
+            </div>
+
+            <div class="button-container">
+                <button onclick="hideSettings()">Back to Monitor</button>
+            </div>
         </div>
     </div>
 
@@ -511,11 +641,20 @@ String PMixerWiFiServer::generateHtmlPage() {
         // Fetch buffered data (batch of multiple samples for high-speed updates)
         async function fetchData() {
             try {
+                // Fetch buffered high-speed data for graphing
                 const response = await fetch('/dataBuffer');
                 const data = await response.json();
 
+                // Fetch current values including Bus 1 data
+                const currentResponse = await fetch('/data');
+                const currentData = await currentResponse.json();
+
                 // Update mode display
                 document.getElementById('modeDisplay').textContent = 'Mode: ' + data.mode;
+
+                // Update Bus 1 display values (from /data endpoint)
+                document.getElementById('flow2Value').textContent = currentData.flow2.toFixed(2);
+                document.getElementById('pressure2Value').textContent = currentData.pressure2.toFixed(2);
 
                 // If no new data points, skip processing
                 if (data.count === 0) {
@@ -660,6 +799,51 @@ String PMixerWiFiServer::generateHtmlPage() {
                 dataHistory.current = [];
                 dataHistory.lowPressure = [];
                 dataHistory.temperature = [];
+            }
+        }
+
+        // ============================================================
+        // Settings View Functions
+        // ============================================================
+        let settingsInterval = null;
+
+        function showSettings() {
+            document.getElementById('mainView').style.display = 'none';
+            document.getElementById('settingsView').style.display = 'block';
+            fetchVentilatorSettings();
+            // Update settings every 1 second
+            settingsInterval = setInterval(fetchVentilatorSettings, 1000);
+        }
+
+        function hideSettings() {
+            document.getElementById('settingsView').style.display = 'none';
+            document.getElementById('mainView').style.display = 'block';
+            if (settingsInterval) {
+                clearInterval(settingsInterval);
+                settingsInterval = null;
+            }
+        }
+
+        async function fetchVentilatorSettings() {
+            try {
+                const response = await fetch('/ventilator');
+                const data = await response.json();
+
+                document.getElementById('ventStatus').textContent = data.running ? 'ON' : 'OFF';
+                document.getElementById('ventStatus').style.color = data.running ? '#28a745' : '#dc3545';
+                document.getElementById('ventState').textContent = data.state;
+                document.getElementById('ventRR').textContent = data.respRate.toFixed(1);
+                document.getElementById('ventVT').textContent = data.tidalVolume.toFixed(0);
+                document.getElementById('ventIE').textContent = '1:' + (1/data.ieRatio).toFixed(1);
+                document.getElementById('ventPI').textContent = data.maxPressure.toFixed(1);
+                document.getElementById('ventPE').textContent = data.peep.toFixed(1);
+                document.getElementById('ventMF').textContent = data.maxFlow.toFixed(1);
+                document.getElementById('ventFiO2').textContent = data.targetFiO2.toFixed(0);
+                document.getElementById('ventBreaths').textContent = data.breathCount;
+                document.getElementById('ventPkP').textContent = data.peakPressure.toFixed(1);
+                document.getElementById('ventMVt').textContent = data.measuredVt.toFixed(0);
+            } catch (error) {
+                console.error('Error fetching ventilator settings:', error);
             }
         }
 

@@ -30,6 +30,15 @@ public:
     void updateMode(const String& mode);
     void updateLowPressure(float lowPressure);
     void updateTemperature(float temperature);
+    void updateFlow2(float flow2);       // Bus 1 flow
+    void updatePressure2(float pressure2); // Bus 1 pressure
+
+    // Ventilator settings update - call from main to push ventilator data
+    void updateVentilatorSettings(bool running, const char* state,
+                                   float respRate, float tidalVolume, float ieRatio,
+                                   float maxPressure, float peep, float maxFlow,
+                                   float targetFiO2, uint32_t breathCount,
+                                   float peakPressure, float measuredVt);
 
     // High-speed data buffering - call this at your control rate for high-speed web updates
     void addDataPoint(float flow, float pressure, float signal, float current, float lowPressure, float temperature);
@@ -50,7 +59,23 @@ private:
     float _currentCurrent;
     float _currentLowPressure;
     float _currentTemperature;
+    float _currentFlow2;       // Bus 1 flow
+    float _currentPressure2;   // Bus 1 pressure
     String _currentMode;
+
+    // Ventilator settings
+    bool _ventRunning;
+    String _ventState;
+    float _ventRespRate;
+    float _ventTidalVolume;
+    float _ventIERatio;
+    float _ventMaxPressure;
+    float _ventPeep;
+    float _ventMaxFlow;
+    float _ventTargetFiO2;
+    uint32_t _ventBreathCount;
+    float _ventPeakPressure;
+    float _ventMeasuredVt;
 
     // Data history for graphing
     std::vector<unsigned long> _timestamps;
@@ -75,13 +100,15 @@ private:
     void handleRoot();
     void handleData();
     void handleHistory();
-    void handleDataBuffer();  // New: Handle buffered data requests
-    
+    void handleDataBuffer();
+    void handleVentilatorSettings();
+
     // HTML generation
     String generateHtmlPage();
     String generateDataJson();
     String generateHistoryJson();
-    String generateBufferJson();  // New: Generate JSON for buffered data
+    String generateBufferJson();
+    String generateVentilatorSettingsJson();
 
     // Data management
     void trimDataHistory();

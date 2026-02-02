@@ -103,11 +103,18 @@ Engineering management who are engineers but not experts in ventilator/respirato
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    I2C BUS 0 (1 MHz)                        │
+│                    I2C BUS 0 (1 MHz) - GPIO43/44            │
 ├─────────────────────────────────────────────────────────────┤
 │  SFM3505 (0x2E)  │  Flow measurement      │  100 Hz        │
 │  ABP2 (0x28)     │  Supply pressure       │  10-100 Hz     │
 │  ABPD (0x18)     │  Airway pressure       │  10-100 Hz     │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│                    I2C BUS 1 (1 MHz) - GPIO10/11            │
+├─────────────────────────────────────────────────────────────┤
+│  SFM3505 (0x2E)  │  Flow measurement #2   │  100 Hz        │
+│  ABP2 (0x28)     │  Pressure #2           │  10-100 Hz     │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -117,7 +124,7 @@ Engineering management who are engineers but not experts in ventilator/respirato
 └─────────────────────────────────────────────────────────────┘
 ```
 
-**Key message:** High-speed flow sensing (100 Hz) enables responsive control.
+**Key message:** Dual I2C buses allow sensors with same address; high-speed flow sensing (100 Hz) enables responsive control.
 
 ---
 
@@ -249,7 +256,8 @@ Air Flow = Total - O2 Flow
 ┌─────────────────────────────────┐
 │  P-Mixer              v0.9.1   │
 ├─────────────────────────────────┤
-│  Flow: 25.34 slm               │
+│  Flow: 25.340 slm Air          │  ← Bus 0 flow
+│  Flow2: 12.150 slm Air         │  ← Bus 1 flow
 │  HP: 2.5  LP: 12.3  25°C       │
 │  Valve: 45.00%                 │
 │  Mode: Valve Set M0            │
@@ -264,10 +272,14 @@ Air Flow = Total - O2 Flow
 ```
 
 **Features:**
+- Dual I2C bus flow display (Bus 0 and Bus 1)
 - Real-time sensor values
 - Current operating mode
 - WiFi status and connection info
-- Button-activated WiFi toggle
+
+**Physical Buttons:**
+- Key 1 (GPIO14): Long=WiFi On, Short=WiFi Off
+- Key 2 (GPIO0): Long=Show Vent Settings, Short=Back
 
 ---
 
@@ -277,24 +289,27 @@ Air Flow = Total - O2 Flow
 ┌─────────────────────────────────────────────────────┐
 │           P-Mixer Monitor  ●                        │
 ├─────────────────────────────────────────────────────┤
-│  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐   │
-│  │  Flow   │ │Pressure │ │Low Press│ │  Temp   │   │
-│  │  25.34  │ │  2.50   │ │  12.30  │ │ 25.1°C  │   │
-│  └─────────┘ └─────────┘ └─────────┘ └─────────┘   │
+│ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐        │
+│ │Flow B0 │ │Flow B1 │ │Press B0│ │Press B1│        │
+│ │ 25.34  │ │ 12.15  │ │  2.50  │ │  2.48  │        │
+│ └────────┘ └────────┘ └────────┘ └────────┘        │
+│ ┌────────┐ ┌────────┐ ┌────────┐ ┌────────┐        │
+│ │Low Pres│ │  Temp  │ │ Valve  │ │Current │        │
+│ │ 12.30  │ │ 25.1°C │ │ 45.0%  │ │0.245 A │        │
+│ └────────┘ └────────┘ └────────┘ └────────┘        │
 ├─────────────────────────────────────────────────────┤
-│                                                     │
 │    ╱╲      Real-time Chart (Chart.js)              │
-│  ╱    ╲     • 6 data channels                      │
+│  ╱    ╲     • 6 data channels graphed              │
 │ ╱      ╲    • 512 data points visible              │
-│              • 100 Hz sample rate                   │
-│                                                     │
 ├─────────────────────────────────────────────────────┤
-│     [Save Data]         [Clear Graph]               │
+│  [Save Data]  [Clear Graph]  [Ventilator Settings] │
 └─────────────────────────────────────────────────────┘
 ```
 
 **Features:**
+- Dual I2C bus data display (Bus 0 and Bus 1)
 - Real-time multi-channel graphs
+- Ventilator settings page (separate view)
 - Data export to TXT file
 - 200ms refresh rate
 - Accessible via WiFi AP (192.168.4.1)
@@ -450,7 +465,8 @@ Response:
 | 18 | Serial1 RX | 460800 baud |
 | 12 | Serial2 TX | FDO2 sensor |
 | 13 | Serial2 RX | 19200 baud |
-| 14 | Button | WiFi toggle |
+| 14 | Key 1 | Long=WiFi On, Short=WiFi Off |
+| 0 | Key 2 (Boot) | Long=Vent Settings, Short=Back |
 | 15 | Display power | Must be HIGH |
 
 ### A2: Full Command Reference

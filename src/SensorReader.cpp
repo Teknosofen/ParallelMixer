@@ -1,7 +1,7 @@
 #include "SensorReader.hpp"
 
-SensorReader::SensorReader(TwoWire* wire, const char* name)
-  : _wire(wire), _name(name), _hasSFM3505(false), _hasABP2(false), _hasABPD(false) {
+SensorReader::SensorReader(TwoWire* wire, const char* name, uint32_t clockFreq)
+  : _wire(wire), _name(name), _clockFreq(clockFreq), _hasSFM3505(false), _hasABP2(false), _hasABPD(false) {
   // Detection flags will be set during initialize()
 }
 
@@ -9,9 +9,9 @@ bool SensorReader::initialize() {
   // NOTE: Wire.begin() should be called in main() before calling initialize()
   // This allows main to control I2C pin configuration
 
-  _wire->setClock(I2C0_CLOCK_FREQ);  // Set I2C clock frequency (defined in PinConfig.h)
+  _wire->setClock(_clockFreq);  // Set I2C clock frequency (passed in constructor)
 
-  Serial.printf("Initializing %s sensors...\n", _name);
+  Serial.printf("Initializing %s sensors (I2C clock: %lu Hz)...\n", _name, (unsigned long)_clockFreq);
 
   // Reset detection flags
   _hasSFM3505 = false;

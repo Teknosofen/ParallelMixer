@@ -40,8 +40,8 @@ TFT_eSPI tft = TFT_eSPI();
 ImageRenderer renderer(tft);
 
 // Two sensor readers on separate I2C buses - use pointers to avoid initialization issues
-SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505
-// SensorReader* sensors_bus1;   // GPIO10/11 - DISABLED FOR NOW
+SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505, ABP2, ABPD
+SensorReader* sensors_bus1;   // GPIO10/11 - includes SFM3505, ABP2
 
 // Array of actuator controls - one per MUX channel for parallel operation
 // Each channel can run its own signal generator independently
@@ -57,7 +57,11 @@ SerialMuxRouter muxRouter(&Serial1);
 VentilatorController ventilator;
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
+Button interactionKey2(BOOT_BUTTON_PIN);  // Boot button for settings display
 PMixerWiFiServer wifiServer(PMIXERSSID, PMIXERPWD);
+
+// Display mode: false = live data, true = ventilator settings
+bool showVentilatorSettings = false;
 
 // FDO2 Optical Oxygen Sensor on Serial2
 FDO2_Sensor fdo2Sensor(Serial2);
@@ -70,7 +74,8 @@ SensorData sensorData_bus0;  // Data from Bus 0 sensors (includes SFM3505)
 SensorData sensorData_bus1;  // Data from Bus 1 sensors
 
 // Sensor initialization status
-bool sensorsInitialized = false;
+bool sensorsInitialized = false;      // Bus 0 sensors
+bool sensors_bus1_initialized = false; // Bus 1 sensors
 
 // Timing
 uint32_t past_time;          // For GUI/serial output timing
@@ -79,12 +84,14 @@ uint32_t control_past_time;  // For control system execution timing
 void outputData() {
   // Output data from Bus 0 (primary sensors)
   switch (sysConfig.quiet_mode) {
-    case 0:  // Verbose: Supply Pressure, Low Pressure, Temp, Air flow, Valve signal
-      hostCom.printf("P: %.2f\tLP: %.2f\tT: %.1f\tAir: %.3f\tValve: %.2f\n",
+    case 0:  // Verbose: Supply Pressure, Low Pressure, Temp, Air flow (Bus0 & Bus1), Valve signal
+      hostCom.printf("P: %.2f\tLP: %.2f\tT: %.1f\tAir0: %.3f\tAir1: %.3f\tP1: %.2f\tValve: %.2f\n",
                      sensorData_bus0.supply_pressure,
                      sensorData_bus0.abpd_pressure,
                      sensorData_bus0.abpd_temperature,
                      sensorData_bus0.sfm3505_air_flow,
+                     sensorData_bus1.sfm3505_air_flow,
+                     sensorData_bus1.supply_pressure,
                      actuator.getValveControlSignal());
       break;
 
@@ -332,14 +339,64 @@ void setup() {
   }
   hostCom.println();
 
-  // Display I2C scan results on screen
-  String line2 = "Bus 0: " + bus0Addresses;
-  renderer.showLinesOnScreen("I2C devices found", line2.c_str(), "Bus 1: N/A");
+  // Create sensor reader for Bus 0
+  sensors_bus0 = new SensorReader(&Wire, "Bus0", I2C0_CLOCK_FREQ);
+
+  // ============================================================================
+  // Initialize I2C Bus 1 (Wire1) - GPIO10/11
+  // ============================================================================
+  hostCom.printf("\nI2C Bus 1: SDA=GPIO%d, SCL=GPIO%d @ %dkHz\n",
+                 I2C1_SDA_PIN, I2C1_SCL_PIN, I2C0_CLOCK_FREQ / 1000);
+
+  Wire1.begin(I2C1_SDA_PIN, I2C1_SCL_PIN, I2C0_CLOCK_FREQ);
+
+  // Scan I2C Bus 1 for devices
+  hostCom.println("Scanning I2C Bus 1...");
+  int bus1DeviceCount = 0;
+  String bus1Addresses = "";
+
+  for (byte address = 0x01; address < 0x7F; address++) {
+    Wire1.beginTransmission(address);
+    if (Wire1.endTransmission() == 0) {
+      hostCom.printf("  0x%02X", address);
+
+      // Build address string for screen display
+      if (bus1DeviceCount > 0) bus1Addresses += " ";
+      bus1Addresses += "0x";
+      if (address < 0x10) bus1Addresses += "0";
+      bus1Addresses += String(address, HEX);
+
+      // Identify known devices
+      if (address == 0x2E) hostCom.print(" - SFM3505 (flow)");
+      else if (address == 0x28) hostCom.print(" - ABP2 (pressure)");
+      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)");
+      else if (address == 0x60) hostCom.print(" - MCP4725 (DAC)");
+      else hostCom.print(" - unknown device");
+
+      hostCom.println();
+      bus1DeviceCount++;
+    }
+    delay(5);
+  }
+
+  if (bus1DeviceCount == 0) {
+    hostCom.println("  ⚠️ No I2C devices found on Bus 1!");
+    bus1Addresses = "None";
+  } else {
+    hostCom.printf("  ✅ Found %d device(s) on Bus 1\n", bus1DeviceCount);
+  }
+  hostCom.println();
+
+  // Display I2C scan results on screen (both buses)
+  String line2 = "Bus0: " + bus0Addresses;
+  String line3 = "Bus1: " + bus1Addresses;
+  renderer.showLinesOnScreen("I2C devices found", line2.c_str(), line3.c_str());
   hostCom.printf("I2C Bus 0 addr: %s\n", bus0Addresses.c_str());
+  hostCom.printf("I2C Bus 1 addr: %s\n", bus1Addresses.c_str());
   delay(2000);
 
-  // Create sensor reader
-  sensors_bus0 = new SensorReader(&Wire, "Bus0");
+  // Create sensor reader for Bus 1
+  sensors_bus1 = new SensorReader(&Wire1, "Bus1", I2C0_CLOCK_FREQ);
 
   // ============================================================================
   // Initialize Serial1 (external actuator communication)
@@ -387,13 +444,21 @@ void setup() {
   hostCom.println();
 
   // ============================================================================
-  // Initialize sensors
+  // Initialize sensors on both I2C buses
   // ============================================================================
   interactionKey1.begin();
+  interactionKey2.begin();  // Boot button for settings display
 
+  // Initialize Bus 0 sensors
   sensorsInitialized = sensors_bus0->initialize();
   if (!sensorsInitialized) {
-    hostCom.println("⚠️ Sensor initialization failed - check connections\n");
+    hostCom.println("⚠️ Bus 0 sensor initialization failed - check connections\n");
+  }
+
+  // Initialize Bus 1 sensors
+  sensors_bus1_initialized = sensors_bus1->initialize();
+  if (!sensors_bus1_initialized) {
+    hostCom.println("⚠️ Bus 1 sensor initialization failed - check connections\n");
   }
 
   // ============================================================================
@@ -508,6 +573,47 @@ void loop() {
       // No ABPD detected - set to invalid indicator
       sensorData_bus0.abpd_pressure = -9.9;
       sensorData_bus0.abpd_temperature = -9.9;
+    }
+
+    // ========================================================================
+    // Read Bus 1 SFM3505 Flow Sensor
+    // ========================================================================
+    if (sensors_bus1_initialized && sensors_bus1->hasSFM3505()) {
+      float sfm_air, sfm_o2;
+      if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
+        sensorData_bus1.sfm3505_air_flow = sfm_air;
+        sensorData_bus1.sfm3505_o2_flow = sfm_o2;
+      } else {
+        sensorData_bus1.sfm3505_air_flow = -9.9;
+        sensorData_bus1.sfm3505_o2_flow = -9.9;
+      }
+    } else if (!sensors_bus1_initialized || !sensors_bus1->hasSFM3505()) {
+      sensorData_bus1.sfm3505_air_flow = -9.9;
+      sensorData_bus1.sfm3505_o2_flow = -9.9;
+    }
+
+    // ========================================================================
+    // Read Bus 1 ABP2 Pressure Sensor (Asynchronous)
+    // ========================================================================
+    static uint32_t lastBus1PressureTime = 0;
+    static bool bus1PressureCommandSent = false;
+
+    if (sensors_bus1_initialized && sensors_bus1->hasABP2() && (currentTime - lastBus1PressureTime) >= sysConfig.PressSamplTime) {
+      lastBus1PressureTime = currentTime;
+
+      if (!bus1PressureCommandSent) {
+        sensors_bus1->startABP2Measurement();
+        bus1PressureCommandSent = true;
+      } else {
+        float pressure;
+        uint8_t status;
+        if (sensors_bus1->readABP2Pressure(pressure, status)) {
+          sensorData_bus1.supply_pressure = pressure;
+        }
+        bus1PressureCommandSent = false;
+      }
+    } else if (!sensors_bus1_initialized || !sensors_bus1->hasABP2()) {
+      sensorData_bus1.supply_pressure = -9.9;
     }
 
     // ========================================================================
@@ -633,8 +739,34 @@ void loop() {
     wifiServer.updateTemperature(sensorData_bus0.abpd_temperature);  // Send ABPD temperature to web
     wifiServer.updateValveSignal(actuator.getValveControlSignal());
     wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));  // Send current from selected MUX channel to web
+
+    // ========================================================================
+    // Update WiFi server with Bus 1 data
+    // ========================================================================
+    wifiServer.updateFlow2(sensorData_bus1.sfm3505_air_flow);  // Send Bus 1 SFM3505 Air flow to web
+    wifiServer.updatePressure2(sensorData_bus1.supply_pressure);  // Send Bus 1 ABP2 pressure to web
+
+    // ========================================================================
+    // Update WiFi server with ventilator settings
+    // ========================================================================
+    VentilatorConfig cfg = ventilator.getConfig();
+    VentilatorStatus st = ventilator.getStatus();
+    wifiServer.updateVentilatorSettings(
+        ventilator.isRunning(),
+        ventilator.getStateString(),
+        cfg.respRate,
+        cfg.tidalVolume_mL,
+        cfg.ieRatio,
+        cfg.maxPressure_mbar,
+        cfg.peep_mbar,
+        cfg.maxInspFlow_slm,
+        cfg.targetFiO2,
+        st.breathCount,
+        st.peakPressure_mbar,
+        st.measuredVt_mL
+    );
   }
-  
+
   // ============================================================================
   // Handle Serial1 communication with external microcontroller (Asynchronous)
   // ============================================================================
@@ -673,53 +805,68 @@ void loop() {
   static uint32_t UILoopStartTime = micros();
   if (micros() - UILoopStartTime > SET_UI_UPDATE_TIME) {
     UILoopStartTime = micros();
-    
-    ControllerMode presentMode = actuator.getControllerMode();
-    String ctrlMode = "Valve Set";
-    switch (presentMode) {
-      case PID_CONTROL:
-        ctrlMode = "PID";
-        break;
-      case VALVE_SET_VALUE_CONTROL:
-        ctrlMode = "Valve Set";
-        break;
-      case SINE_CONTROL:
-        ctrlMode = "Sine";
-        break;
-      case STEP_CONTROL:
-        ctrlMode = "Step";
-        break;
-      case TRIANGLE_CONTROL:
-        ctrlMode = "Triangle";
-        break;
-      case SWEEP_CONTROL:
-        ctrlMode = "Sweep";
-        break;
-      default:
-        ctrlMode = "Unknown";
-        break;
-    }
-    
-    // Include MUX channel in mode display
-    String modeWithChannel = ctrlMode + " M" + String(sysConfig.mux_channel);
-    renderer.drawControllerMode(modeWithChannel);
-    wifiServer.updateMode(modeWithChannel);
 
-    // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
-    renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air
-    // Show both supply pressure (ABP2) and low pressure (ABPD) with temperature
-    String pressureStr = "HP: " + String(sensorData_bus0.supply_pressure, 1) + " LP: " +
-                         String(sensorData_bus0.abpd_pressure, 1) + " " +
-                         String(sensorData_bus0.abpd_temperature, 1) + " C";
-    renderer.drawPressure(pressureStr);
-    renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
-    // Show current from selected MUX channel
-    renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
-    // Show O2 partial pressure from FDO2 sensor
-    if (fdo2Initialized) {
-      renderer.drawO2(String(fdo2Data.oxygenPartialPressure_hPa, 1) + " hPa");
-    } else {
-      renderer.drawO2("N/A");
+    // Only update live data display when not showing ventilator settings
+    if (!showVentilatorSettings) {
+      ControllerMode presentMode = actuator.getControllerMode();
+      String ctrlMode = "Valve Set";
+      switch (presentMode) {
+        case PID_CONTROL:
+          ctrlMode = "PID";
+          break;
+        case VALVE_SET_VALUE_CONTROL:
+          ctrlMode = "Valve Set";
+          break;
+        case SINE_CONTROL:
+          ctrlMode = "Sine";
+          break;
+        case STEP_CONTROL:
+          ctrlMode = "Step";
+          break;
+        case TRIANGLE_CONTROL:
+          ctrlMode = "Triangle";
+          break;
+        case SWEEP_CONTROL:
+          ctrlMode = "Sweep";
+          break;
+        default:
+          ctrlMode = "Unknown";
+          break;
+      }
+
+      // Include MUX channel in mode display
+      String modeWithChannel = ctrlMode + " M" + String(sysConfig.mux_channel);
+      renderer.drawControllerMode(modeWithChannel);
+      wifiServer.updateMode(modeWithChannel);
+
+      // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
+      renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air Bus 0
+      renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air Bus 1
+      // Show both supply pressure (ABP2) and low pressure (ABPD) with temperature
+      String pressureStr = "HP: " + String(sensorData_bus0.supply_pressure, 1) + " LP: " +
+                           String(sensorData_bus0.abpd_pressure, 1) + " " +
+                           String(sensorData_bus0.abpd_temperature, 1) + " C";
+      renderer.drawPressure(pressureStr);
+      renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
+      // Show current from selected MUX channel
+      renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
+    }
+  }
+
+  // ============================================================================
+  // O2 sensor display update (slower rate - 0.5 second interval)
+  // ============================================================================
+  static uint32_t O2DisplayLoopStartTime = micros();
+  if (micros() - O2DisplayLoopStartTime > FDO2_SAMPLE_TIME_US) {
+    O2DisplayLoopStartTime = micros();
+
+    // Update O2 display only when not showing ventilator settings
+    if (!showVentilatorSettings) {
+      if (fdo2Initialized) {
+        renderer.drawO2(String(fdo2Data.oxygenPartialPressure_hPa, 1) + " hPa");
+      } else {
+        renderer.drawO2("N/A");
+      }
     }
   }
 
@@ -741,7 +888,58 @@ void loop() {
       renderer.drawWiFiPromt("Long press: enable");
     }
   }
-  
+
+  // ============================================================================
+  // Boot button handling - Ventilator settings display
+  // ============================================================================
+  if (interactionKey2.wasReleased()) {
+    if (interactionKey2.wasLongPress()) {
+      // Long press: Show ventilator settings
+      hostCom.println("Key2 long press - Showing ventilator settings");
+      showVentilatorSettings = true;
+
+      // Get ventilator config and status
+      VentilatorConfig cfg = ventilator.getConfig();
+      VentilatorStatus st = ventilator.getStatus();
+
+      // Format the settings strings
+      String line1 = String("Vent: ") + (ventilator.isRunning() ? "ON" : "OFF") +
+                     "  " + ventilator.getStateString();
+      String line2 = "RR=" + String(cfg.respRate, 1) + " VT=" + String(cfg.tidalVolume_mL, 0) +
+                     " IE=" + String(cfg.ieRatio, 2);
+      String line3 = "PI=" + String(cfg.maxPressure_mbar, 1) + " PE=" + String(cfg.peep_mbar, 1) +
+                     " MF=" + String(cfg.maxInspFlow_slm, 1);
+      String line4;
+      if (ventilator.isRunning()) {
+        line4 = "#" + String(st.breathCount) + " PkP=" + String(st.peakPressure_mbar, 1) +
+                " Vt=" + String(st.measuredVt_mL, 0);
+      } else {
+        line4 = "FiO2=" + String(cfg.targetFiO2 * 100, 0) + "%";
+      }
+
+      renderer.showVentilatorSettings(line1.c_str(), line2.c_str(), line3.c_str(), line4.c_str());
+    } else {
+      // Short press: Return to live data
+      if (showVentilatorSettings) {
+        hostCom.println("Key2 short press - Returning to live data");
+        showVentilatorSettings = false;
+
+        // Redraw the normal UI
+        renderer.clear();
+        renderer.drawLabel();
+        renderer.drawStatusField();
+        renderer.drawWiFiField();
+        if (wifiServer.isRunning()) {
+          renderer.drawWiFiAPIP(wifiServer.getApIpAddress(), PMIXERSSID);
+          renderer.drawWiFiPromt("Short press: disable");
+        } else {
+          renderer.drawWiFiAPIP("WiFi OFF", "No SSID");
+          renderer.drawWiFiPromt("Long press: enable");
+        }
+      }
+    }
+  }
+
   // Handle web requests
   wifiServer.handleClient();
 }

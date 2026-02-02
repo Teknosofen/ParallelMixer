@@ -59,8 +59,9 @@ struct SensorDataRaw {
 class SensorReader {
 public:
   // Constructor now takes TwoWire pointer for I2C bus selection
-  SensorReader(TwoWire* wire, const char* name = "Sensor");
-  
+  // clockFreq defaults to I2C0_CLOCK_FREQ from PinConfig.h
+  SensorReader(TwoWire* wire, const char* name = "Sensor", uint32_t clockFreq = I2C0_CLOCK_FREQ);
+
   bool initialize();
   void update(SensorData& data);
   
@@ -104,6 +105,7 @@ public:
 private:
   TwoWire* _wire;              // Pointer to I2C bus (Wire or Wire1)
   const char* _name;           // For debugging
+  uint32_t _clockFreq;         // I2C clock frequency for this bus
 
   // Sensor detection flags
   bool _hasSFM3505;
