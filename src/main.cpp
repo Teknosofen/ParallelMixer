@@ -465,6 +465,7 @@ void setup() {
 
   // Initialize ventilator controller (HLC)
   ventilator.begin(&muxRouter);
+  wifiServer.setVentilatorController(&ventilator);
   hostCom.println("Ventilator HLC initialized (use VS for status, VO1 to start)");
 
   past_time = micros();

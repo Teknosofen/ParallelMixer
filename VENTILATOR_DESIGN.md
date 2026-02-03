@@ -40,7 +40,7 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │  └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                             │
 │  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    SERIAL1 (MUX Router) @ 460800 baud               │   │
+│  │                    SERIAL1 (MUX Router) @ 230400 baud               │   │
 │  │    GPIO17 (TX) ────► Serial MUX ────► Valve Controllers (Ch 1-5)   │   │
 │  │    GPIO18 (RX) ◄──── Serial MUX ◄──── Actuator Feedback            │   │
 │  └─────────────────────────────────────────────────────────────────────┘   │
@@ -289,30 +289,31 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │                                                                    │
 │  ┌─────────────── Status ─────────────────────────────────────┐   │ y=40
 │  │                                                            │   │
-│  │  Flow: 25.340 slm Air                                      │   │ y=60
+│  │  Flow0: 25.340 slm Air                                     │   │ y=60
 │  │                                                            │   │
-│  │  HP: 2.5 LP: 12.3 25.1 C                                   │   │ y=80
+│  │  Flow1: 12.150 slm Air                                     │   │ y=80
 │  │                                                            │   │
-│  │  Valve: 45.00                                              │   │ y=100
+│  │  P0: 2.50 LP: 12.3 25.1 C                                  │   │ y=100
 │  │                                                            │   │
-│  │  Mode: Valve Set M0                                        │   │ y=120
+│  │  P1: 2.48 bar                                              │   │ y=120
 │  │                                                            │   │
-│  │  Current: 0.245 A                                          │   │ y=140
+│  │  Valve: 45.00                                              │   │ y=140
 │  │                                                            │   │
-│  │  pO2: 212.5 hPa                                            │   │ y=160
+│  │  Mode: Valve Set M0                                        │   │ y=160
 │  │                                                            │   │
-│  └────────────────────────────────────────────────────────────┘   │ y=180
+│  │  Current: 0.245 A                                          │   │ y=180
+│  │                                                            │   │
+│  │  pO2: 212.5 hPa                                            │   │ y=200
+│  │                                                            │   │
+│  └────────────────────────────────────────────────────────────┘   │ y=225
 │                                                                    │
-│                                                                    │
-│                                                                    │
-│                                                                    │
-│  ┌─────────────── WiFi ───────────────────────────────────────┐   │ y=240
+│  ┌─────────────── WiFi ───────────────────────────────────────┐   │ y=250
 │  │                                                            │   │
-│  │  IP: 192.168.4.1                                           │   │ y=260
+│  │  IP: 192.168.4.1                                           │   │ y=270
 │  │                                                            │   │
-│  │  SSID: ParallelMixer                                       │   │ y=280
+│  │  SSID: ParallelMixer                                       │   │ y=290
 │  │                                                            │   │
-│  │  Long press: enable                                        │   │ y=300
+│  │  Long press: enable                                        │   │ y=310
 │  │                                                            │   │
 │  └────────────────────────────────────────────────────────────┘   │ y=320
 │                                                                    │
@@ -325,24 +326,27 @@ Legend:
 │  Text:       TFT_DEEPBLUE (0x1A6F - Dark Blue)                     │
 │  Rectangles: White rounded corners (10px radius)                   │
 │  Fonts:      FSS9 (status), FSSB12 (header)                        │
+│  Status box height: 185px (for 8 data rows)                        │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Display Fields
 
-| Field       | Position      | Content Example                    |
-|-------------|---------------|------------------------------------|
-| Label       | (10, 5)       | "P-Mixer"                          |
-| Version     | (110, 12)     | "v0.9.1"                           |
-| Flow        | (10, 60)      | "25.340 slm Air"                   |
-| Pressure    | (10, 80)      | "HP: 2.5 LP: 12.3 25.1 C"          |
-| Valve       | (10, 100)     | "45.00"                            |
-| Mode        | (10, 120)     | "Valve Set M0" / "Sine M1"         |
-| Current     | (10, 140)     | "0.245 A"                          |
-| pO2         | (10, 160)     | "212.5 hPa"                        |
-| WiFi IP     | (10, 260)     | "192.168.4.1" / "WiFi OFF"         |
-| WiFi SSID   | (10, 280)     | "ParallelMixer" / "No SSID"        |
-| WiFi Prompt | (10, 300)     | "Long press: enable/disable"       |
+| Field       | Position (y offset) | Content Example                    |
+|-------------|---------------------|------------------------------------|
+| Label       | y=5                 | "P-Mixer"                          |
+| Version     | y=12                | "v0.9.1"                           |
+| Flow0       | +20                 | "Flow0: 25.340 slm Air"            |
+| Flow1       | +40                 | "Flow1: 12.150 slm Air"            |
+| Pressure0   | +60                 | "P0: 2.50 LP: 12.3 25.1 C"         |
+| Pressure1   | +80                 | "P1: 2.48 bar"                     |
+| Valve       | +100                | "Valve: 45.00"                     |
+| Mode        | +120                | "Valve Set M0" / "Sine M1"         |
+| Current     | +140                | "0.245 A"                          |
+| pO2         | +160                | "212.5 hPa"                        |
+| WiFi IP     | y=270               | "192.168.4.1" / "WiFi OFF"         |
+| WiFi SSID   | y=290               | "ParallelMixer" / "No SSID"        |
+| WiFi Prompt | y=310               | "Long press: enable/disable"       |
 
 ---
 
@@ -358,63 +362,93 @@ Legend:
 │                                                                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐ │
 │  │                    P-Mixer Monitor  ●                                │ │
-│  │                                    (blink)                           │ │
 │  └──────────────────────────────────────────────────────────────────────┘ │
 │                                                                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐ │
 │  │                     Mode: Valve Set M0                               │ │
-│  │                     (green background)                               │ │
 │  └──────────────────────────────────────────────────────────────────────┘ │
 │                                                                            │
-│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐     │
-│  │    Flow      │ │   Pressure   │ │ Low Pressure │ │ Temperature  │     │
-│  │   25.34      │ │     2.50     │ │    12.30     │ │   25.1 °C    │     │
-│  │  (blue)      │ │   (blue)     │ │   (blue)     │ │   (blue)     │     │
-│  └──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘     │
-│                                                                            │
-│  ┌──────────────┐ ┌──────────────┐                                        │
-│  │Valve Signal  │ │   Current    │                                        │
-│  │   45.00      │ │  0.245 A     │                                        │
-│  │  (blue)      │ │   (blue)     │                                        │
-│  └──────────────┘ └──────────────┘                                        │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐                    │
+│  │Flow(Bus0)│ │Flow(Bus1)│ │Pres(Bus0)│ │Pres(Bus1)│                    │
+│  │  25.34   │ │  12.15   │ │   2.50   │ │   2.48   │                    │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘                    │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐                    │
+│  │Low Press │ │   Temp   │ │  Valve   │ │ Current  │                    │
+│  │  12.30   │ │ 25.1 °C  │ │  45.00   │ │ 0.245 A  │                    │
+│  └──────────┘ └──────────┘ └──────────┘ └──────────┘                    │
 │                                                                            │
 │  ┌──────────────────────────────────────────────────────────────────────┐ │
-│  │                       Real-time Data                                 │ │
-│  │  ┌─────────────────────────────────────────────────────────────────┐ │ │
-│  │  │                                                                 │ │ │
-│  │  │  Flow ────────────────────────────────────────── (Blue)         │ │ │
-│  │  │  Pressure ────────────────────────────────────── (Red)          │ │ │
-│  │  │  Low Pressure ────────────────────────────────── (Pink)         │ │ │
-│  │  │  Temperature ─────────────────────────────────── (Purple)       │ │ │
-│  │  │  Valve Signal ────────────────────────────────── (Cyan)         │ │ │
-│  │  │  Current ─────────────────────────────────────── (Orange)       │ │ │
-│  │  │                                                                 │ │ │
-│  │  │  ▲                    ╱╲      ╱╲                                │ │ │
-│  │  │  │    ╱╲    ╱╲      ╱  ╲    ╱  ╲                               │ │ │
-│  │  │  │  ╱    ╲╱    ╲  ╱    ╲  ╱    ╲                               │ │ │
-│  │  │  │╱             ╲╱      ╲╱      ╲                               │ │ │
-│  │  │  └─────────────────────────────────────────────────► Time (s)   │ │ │
-│  │  │      10      20      30      40      50      60                 │ │ │
-│  │  └─────────────────────────────────────────────────────────────────┘ │ │
+│  │  Real-time Chart (Chart.js 4.4.0, served from PROGMEM)              │ │
+│  │  8 data channels:                                                    │ │
+│  │    Flow(Bus0) ──── Blue     │  Flow(Bus1) ──── Light Blue (dashed)  │ │
+│  │    Press(Bus0) ── Red       │  Press(Bus1) ── Orange-Red (dashed)   │ │
+│  │    Low Pressure ─ Pink      │  Temperature ── Purple                │ │
+│  │    Valve Signal ─ Cyan      │  Current ─────── Orange               │ │
+│  │  512 data points visible, 200ms polling                              │ │
 │  └──────────────────────────────────────────────────────────────────────┘ │
 │                                                                            │
-│         ┌─────────────────┐         ┌─────────────────┐                   │
-│         │    Save Data    │         │   Clear Graph   │                   │
-│         │     (blue)      │         │     (blue)      │                   │
-│         └─────────────────┘         └─────────────────┘                   │
+│   ┌───────────┐  ┌───────────┐  ┌─────────────────────┐                  │
+│   │ Save Data │  │Clear Graph│  │Ventilator Settings  │                  │
+│   └───────────┘  └───────────┘  └─────────────────────┘                  │
 │                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘
+
+Ventilator Settings Page (separate view, accessed via button):
+┌────────────────────────────────────────────────────────────────────────────┐
+│                       Ventilator Settings                                  │
+│                                                                            │
+│   ┌────────┐  State: INSP1                                                │
+│   │ON / OFF│  (toggle button, green=ON, red=OFF)                          │
+│   └────────┘                                                              │
+│                                                                            │
+│   Timing:                                                                  │
+│   ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐       │
+│   │ RR   │ │ I:E  │ │ IP   │ │ I1   │ │ I2   │ │ EN   │ │ ES   │       │
+│   │[12.0]│ │[0.50]│ │[0.10]│ │[1.00]│ │[0.00]│ │[0.50]│ │[0.00]│       │
+│   └──────┘ └──────┘ └──────┘ └──────┘ └──────┘ └──────┘ └──────┘       │
+│                                                                            │
+│   Volume/Flow:                                                             │
+│   ┌──────┐ ┌──────┐ ┌──────┐ ┌────────────┐                              │
+│   │Vt mL │ │MaxFlw│ │TotFlw│ │VolCtrl[▼] │                              │
+│   │[500] │ │[60.0]│ │[30.0]│ │[Vt-based] │                              │
+│   └──────┘ └──────┘ └──────┘ └────────────┘                              │
+│                                                                            │
+│   Pressure:           Gas:        Trigger:                                 │
+│   ┌──────┐ ┌──────┐  ┌──────┐   ┌──────┐ ┌──────┐ ┌──────┐ ┌──────┐    │
+│   │PIP   │ │PEEP  │  │FiO2% │   │TE[▼]│ │BiasFl│ │FlwTrg│ │PrsTrg│    │
+│   │[30.0]│ │[5.0] │  │[21]  │   │[Off]│ │[2.0] │ │[2.0] │ │[2.0] │    │
+│   └──────┘ └──────┘  └──────┘   └──────┘ └──────┘ └──────┘ └──────┘    │
+│                                                                            │
+│   Alarms:                                                                  │
+│   ┌──────┐ ┌──────┐ ┌──────┐                                             │
+│   │HighP │ │LowP  │ │Apnea │                                             │
+│   │[40.0]│ │[3.0] │ │[20.0]│                                             │
+│   └──────┘ └──────┘ └──────┘                                             │
+│                                                                            │
+│   ┌──────────┐ ┌──────────┐ ┌──────────┐                                 │
+│   │Breath:#12│ │PkP: 22.3 │ │Vt: 448mL │  (read-only)                   │
+│   └──────────┘ └──────────┘ └──────────┘                                 │
+│                                                                            │
+│       ┌──────────────┐          ┌──────────────────┐                      │
+│       │Send Settings │          │ Back to Monitor  │                      │
+│       │   (orange)   │          │     (blue)       │                      │
+│       └──────────────┘          └──────────────────┘                      │
 └────────────────────────────────────────────────────────────────────────────┘
 
 API Endpoints:
 ┌───────────────────────────────────────────────────────────────────────────┐
-│  GET /           → HTML page with Chart.js visualization                 │
-│  GET /data       → JSON: current values (single sample)                  │
-│  GET /history    → JSON: historical arrays (last 100 samples)            │
-│  GET /dataBuffer → JSON: buffered samples since last fetch (cleared)     │
+│  GET  /              → HTML page with Chart.js visualization              │
+│  GET  /data          → JSON: current values (single sample)               │
+│  GET  /history       → JSON: historical arrays (last 100 samples)         │
+│  GET  /dataBuffer    → JSON: buffered samples since last fetch (cleared)  │
+│  GET  /ventilator    → JSON: full ventilator config + status              │
+│  POST /ventilator/set→ Set ventilator parameters (form-encoded)           │
+│  GET  /chart.min.js  → Chart.js 4.4.0 (gzip, served from PROGMEM)        │
 └───────────────────────────────────────────────────────────────────────────┘
 
 Update Rate: 200ms polling interval (5 Hz), displays up to 512 points
-Buffer: Up to 4000 samples accumulated between fetches
+Buffer: Up to 3000 samples accumulated between fetches
+Chart.js: Embedded in flash as gzip-compressed PROGMEM (69KB flash → 205KB JS)
 ```
 
 ### Web Data Format

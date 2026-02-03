@@ -6,6 +6,9 @@
 #include <WebServer.h>
 #include <vector>
 
+// Forward declaration
+class VentilatorController;
+
 // Compile-time configuration for graph display
 #ifndef PMIXER_GRAPH_DISPLAY_POINTS
 #define PMIXER_GRAPH_DISPLAY_POINTS 512  // Default: 512 samples shown on graph
@@ -44,6 +47,9 @@ public:
     void addDataPoint(float flow, float pressure, float signal, float current, float lowPressure, float temperature,
                       float flow2, float pressure2);
 
+    // Ventilator controller reference - enables web-based settings control
+    void setVentilatorController(VentilatorController* vc) { _ventController = vc; }
+
     // Configuration
     void setMaxDataPoints(int points) { _maxDataPoints = points; }
     
@@ -52,6 +58,7 @@ private:
     String _password;
     bool _running;
     int _maxDataPoints;
+    VentilatorController* _ventController;
     
     // Current values
     float _currentFlow;
@@ -107,6 +114,7 @@ private:
     void handleHistory();
     void handleDataBuffer();
     void handleVentilatorSettings();
+    void handleVentilatorSet();
 
     // HTML generation
     String generateHtmlPage();

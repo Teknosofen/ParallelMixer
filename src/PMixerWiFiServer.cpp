@@ -1,10 +1,11 @@
 #include "PMixerWiFiServer.hpp"
+#include "VentilatorController.hpp"
 #include "chart_js_min_gz.h"
 
 WebServer server(80);
 
 PMixerWiFiServer::PMixerWiFiServer(String ssid, String password)
-    : _ssid(ssid), _password(password), _running(false), _maxDataPoints(100),
+    : _ssid(ssid), _password(password), _running(false), _maxDataPoints(100), _ventController(nullptr),
       _currentFlow(0.0f), _currentPressure(0.0f), _currentValveSignal(0.0f),
       _currentCurrent(0.0f), _currentLowPressure(0.0f), _currentTemperature(0.0f),
       _currentFlow2(0.0f), _currentPressure2(0.0f),
@@ -173,6 +174,7 @@ void PMixerWiFiServer::setupWebServer() {
     server.on("/history", [this]() { handleHistory(); });
     server.on("/dataBuffer", [this]() { handleDataBuffer(); });
     server.on("/ventilator", [this]() { handleVentilatorSettings(); });
+    server.on("/ventilator/set", HTTP_POST, [this]() { handleVentilatorSet(); });
     // Serve Chart.js from PROGMEM (gzip compressed) for offline operation
     server.on("/chart.min.js", []() {
         server.sendHeader("Content-Encoding", "gzip");
@@ -185,20 +187,148 @@ void PMixerWiFiServer::handleVentilatorSettings() {
     server.send(200, "application/json", generateVentilatorSettingsJson());
 }
 
+void PMixerWiFiServer::handleVentilatorSet() {
+    if (!_ventController) {
+        server.send(500, "application/json", "{\"error\":\"No ventilator controller\"}");
+        return;
+    }
+
+    // Parse POST arguments and apply to ventilator controller
+    if (server.hasArg("vo")) {
+        int val = server.arg("vo").toInt();
+        if (val) _ventController->start(); else _ventController->stop();
+    }
+    if (server.hasArg("rr")) {
+        _ventController->setRespRate(server.arg("rr").toFloat());
+    }
+    if (server.hasArg("vt")) {
+        _ventController->setTidalVolume(server.arg("vt").toFloat());
+    }
+    if (server.hasArg("ie")) {
+        _ventController->setIERatio(server.arg("ie").toFloat());
+    }
+    if (server.hasArg("pi")) {
+        _ventController->setMaxPressure(server.arg("pi").toFloat());
+    }
+    if (server.hasArg("pe")) {
+        _ventController->setPEEP(server.arg("pe").toFloat());
+    }
+    if (server.hasArg("mf")) {
+        _ventController->setMaxFlow(server.arg("mf").toFloat());
+    }
+    if (server.hasArg("fi")) {
+        // Input is percentage, convert to fraction
+        _ventController->setFiO2(server.arg("fi").toFloat() / 100.0f);
+    }
+    // Timing fractions
+    if (server.hasArg("ip")) {
+        _ventController->setInspPauseFraction(server.arg("ip").toFloat());
+    }
+    if (server.hasArg("i1")) {
+        _ventController->setInsp1Fraction(server.arg("i1").toFloat());
+    }
+    if (server.hasArg("i2")) {
+        _ventController->setInsp2Fraction(server.arg("i2").toFloat());
+    }
+    if (server.hasArg("en")) {
+        _ventController->setExpNonTrigFraction(server.arg("en").toFloat());
+    }
+    if (server.hasArg("es")) {
+        _ventController->setExpSyncFraction(server.arg("es").toFloat());
+    }
+    // Volume/Flow
+    if (server.hasArg("tf")) {
+        _ventController->setTotalFlow(server.arg("tf").toFloat());
+    }
+    if (server.hasArg("vc")) {
+        _ventController->setUseVolumeControl(server.arg("vc").toInt() != 0);
+    }
+    // Pressure
+    if (server.hasArg("pr")) {
+        _ventController->setPressureRampTime(server.arg("pr").toFloat());
+    }
+    // Trigger
+    if (server.hasArg("te")) {
+        _ventController->setTriggerEnabled(server.arg("te").toInt() != 0);
+    }
+    if (server.hasArg("bf")) {
+        _ventController->setBiasFlow(server.arg("bf").toFloat());
+    }
+    if (server.hasArg("ft")) {
+        _ventController->setFlowTrigger(server.arg("ft").toFloat());
+    }
+    if (server.hasArg("pt")) {
+        _ventController->setPressureTrigger(server.arg("pt").toFloat());
+    }
+    // Alarms
+    if (server.hasArg("ah")) {
+        VentilatorConfig cfg = _ventController->getConfig();
+        cfg.highPressureAlarm_mbar = server.arg("ah").toFloat();
+        _ventController->setConfig(cfg);
+    }
+    if (server.hasArg("al")) {
+        VentilatorConfig cfg = _ventController->getConfig();
+        cfg.lowPressureAlarm_mbar = server.arg("al").toFloat();
+        _ventController->setConfig(cfg);
+    }
+    if (server.hasArg("aa")) {
+        VentilatorConfig cfg = _ventController->getConfig();
+        cfg.apneaTime_s = server.arg("aa").toFloat();
+        _ventController->setConfig(cfg);
+    }
+
+    server.send(200, "application/json", "{\"ok\":true}");
+}
+
 String PMixerWiFiServer::generateVentilatorSettingsJson() {
     String json = "{";
     json += "\"running\":" + String(_ventRunning ? "true" : "false") + ",";
     json += "\"state\":\"" + _ventState + "\",";
-    json += "\"respRate\":" + String(_ventRespRate, 1) + ",";
-    json += "\"tidalVolume\":" + String(_ventTidalVolume, 0) + ",";
-    json += "\"ieRatio\":" + String(_ventIERatio, 2) + ",";
-    json += "\"maxPressure\":" + String(_ventMaxPressure, 1) + ",";
-    json += "\"peep\":" + String(_ventPeep, 1) + ",";
-    json += "\"maxFlow\":" + String(_ventMaxFlow, 1) + ",";
-    json += "\"targetFiO2\":" + String(_ventTargetFiO2 * 100, 0) + ",";
+    // Status (from cached values updated by main loop)
     json += "\"breathCount\":" + String(_ventBreathCount) + ",";
     json += "\"peakPressure\":" + String(_ventPeakPressure, 1) + ",";
-    json += "\"measuredVt\":" + String(_ventMeasuredVt, 0);
+    json += "\"measuredVt\":" + String(_ventMeasuredVt, 0) + ",";
+    // Config (read directly from controller for full parameter set)
+    if (_ventController) {
+        VentilatorConfig cfg = _ventController->getConfig();
+        // Timing
+        json += "\"respRate\":" + String(cfg.respRate, 1) + ",";
+        json += "\"ieRatio\":" + String(cfg.ieRatio, 2) + ",";
+        json += "\"inspPauseFraction\":" + String(cfg.inspPauseFraction, 2) + ",";
+        json += "\"insp1Fraction\":" + String(cfg.insp1Fraction, 2) + ",";
+        json += "\"insp2Fraction\":" + String(cfg.insp2Fraction, 2) + ",";
+        json += "\"expNonTrigFraction\":" + String(cfg.expNonTrigFraction, 2) + ",";
+        json += "\"expSyncFraction\":" + String(cfg.expSyncFraction, 2) + ",";
+        // Volume/Flow
+        json += "\"tidalVolume\":" + String(cfg.tidalVolume_mL, 0) + ",";
+        json += "\"maxFlow\":" + String(cfg.maxInspFlow_slm, 1) + ",";
+        json += "\"totalFlow\":" + String(cfg.totalFlow_slm, 1) + ",";
+        json += "\"useVolumeControl\":" + String(cfg.useVolumeControl ? "true" : "false") + ",";
+        // Pressure
+        json += "\"maxPressure\":" + String(cfg.maxPressure_mbar, 1) + ",";
+        json += "\"peep\":" + String(cfg.peep_mbar, 1) + ",";
+        json += "\"pressureRampTime\":" + String(cfg.pressureRampTime_ms, 0) + ",";
+        // Gas
+        json += "\"targetFiO2\":" + String(cfg.targetFiO2 * 100, 0) + ",";
+        // Trigger
+        json += "\"triggerEnabled\":" + String(cfg.triggerEnabled ? "true" : "false") + ",";
+        json += "\"biasFlow\":" + String(cfg.biasFlow_slm, 1) + ",";
+        json += "\"flowTrigger\":" + String(cfg.flowTrigger_slm, 1) + ",";
+        json += "\"pressureTrigger\":" + String(cfg.pressureTrigger_mbar, 1) + ",";
+        // Alarms
+        json += "\"highPressureAlarm\":" + String(cfg.highPressureAlarm_mbar, 1) + ",";
+        json += "\"lowPressureAlarm\":" + String(cfg.lowPressureAlarm_mbar, 1) + ",";
+        json += "\"apneaTime\":" + String(cfg.apneaTime_s, 1);
+    } else {
+        // Fallback to cached values
+        json += "\"respRate\":" + String(_ventRespRate, 1) + ",";
+        json += "\"tidalVolume\":" + String(_ventTidalVolume, 0) + ",";
+        json += "\"ieRatio\":" + String(_ventIERatio, 2) + ",";
+        json += "\"maxPressure\":" + String(_ventMaxPressure, 1) + ",";
+        json += "\"peep\":" + String(_ventPeep, 1) + ",";
+        json += "\"maxFlow\":" + String(_ventMaxFlow, 1) + ",";
+        json += "\"targetFiO2\":" + String(_ventTargetFiO2 * 100, 0);
+    }
     json += "}";
     return json;
 }
@@ -455,6 +585,51 @@ String PMixerWiFiServer::generateHtmlPage() {
             0%, 50% { opacity: 1; }
             51%, 100% { opacity: 0.3; }
         }
+        .settings-input {
+            width: 80px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #0078D7;
+            border: 2px solid #ccc;
+            border-radius: 6px;
+            padding: 4px 8px;
+            text-align: center;
+        }
+        .settings-input:focus {
+            border-color: #0078D7;
+            outline: none;
+        }
+        .toggle-btn {
+            padding: 10px 28px;
+            font-size: 18px;
+            font-weight: bold;
+            border-radius: 10px;
+            border: none;
+            cursor: pointer;
+            box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+        }
+        .toggle-on {
+            background-color: #28a745;
+            color: white;
+        }
+        .toggle-off {
+            background-color: #dc3545;
+            color: white;
+        }
+        .send-btn {
+            background-color: #FF8C00;
+            color: white;
+        }
+        .send-btn:hover {
+            background-color: #E07800;
+        }
+        .settings-feedback {
+            display: inline-block;
+            margin-left: 10px;
+            font-weight: bold;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
     </style>
 </head>
 <body>
@@ -515,43 +690,138 @@ String PMixerWiFiServer::generateHtmlPage() {
         <div id="settingsView" style="display: none;">
             <h2 style="text-align: center; color: #0078D7;">Ventilator Settings</h2>
 
+            <!-- On/Off toggle and status row -->
+            <div style="text-align:center; margin-bottom:15px;">
+                <button class="toggle-btn toggle-off" id="ventToggleBtn" onclick="toggleVentilator()">OFF</button>
+                <span style="margin-left:20px; font-size:18px;">State: <b id="ventState">--</b></span>
+            </div>
+
+            <!-- Timing -->
+            <h3 style="color:#0078D7; margin:10px 0 5px 5px;">Timing</h3>
             <div class="status-panel">
                 <div class="status-card">
-                    <div class="status-label">Status</div>
-                    <div class="status-value" id="ventStatus">--</div>
-                </div>
-                <div class="status-card">
-                    <div class="status-label">State</div>
-                    <div class="status-value" id="ventState">--</div>
-                </div>
-                <div class="status-card">
                     <div class="status-label">Resp Rate (BPM)</div>
-                    <div class="status-value" id="ventRR">--</div>
-                </div>
-                <div class="status-card">
-                    <div class="status-label">Tidal Volume (mL)</div>
-                    <div class="status-value" id="ventVT">--</div>
+                    <input class="settings-input" type="number" id="ventRR" step="0.1" min="1" max="60">
                 </div>
                 <div class="status-card">
                     <div class="status-label">I:E Ratio</div>
-                    <div class="status-value" id="ventIE">--</div>
+                    <input class="settings-input" type="number" id="ventIE" step="0.05" min="0.1" max="4.0">
                 </div>
                 <div class="status-card">
-                    <div class="status-label">Max Pressure (mbar)</div>
-                    <div class="status-value" id="ventPI">--</div>
+                    <div class="status-label">Insp Pause Frac</div>
+                    <input class="settings-input" type="number" id="ventIP" step="0.01" min="0" max="0.5">
                 </div>
                 <div class="status-card">
-                    <div class="status-label">PEEP (mbar)</div>
-                    <div class="status-value" id="ventPE">--</div>
+                    <div class="status-label">Insp1 Fraction</div>
+                    <input class="settings-input" type="number" id="ventI1" step="0.05" min="0" max="1.0">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Insp2 Fraction</div>
+                    <input class="settings-input" type="number" id="ventI2" step="0.05" min="0" max="1.0">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Exp NoTrig Frac</div>
+                    <input class="settings-input" type="number" id="ventEN" step="0.05" min="0" max="1.0">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Exp Sync Frac</div>
+                    <input class="settings-input" type="number" id="ventES" step="0.05" min="0" max="1.0">
+                </div>
+            </div>
+
+            <!-- Volume / Flow -->
+            <h3 style="color:#0078D7; margin:10px 0 5px 5px;">Volume / Flow</h3>
+            <div class="status-panel">
+                <div class="status-card">
+                    <div class="status-label">Tidal Volume (mL)</div>
+                    <input class="settings-input" type="number" id="ventVT" step="10" min="50" max="2000">
                 </div>
                 <div class="status-card">
                     <div class="status-label">Max Flow (slm)</div>
-                    <div class="status-value" id="ventMF">--</div>
+                    <input class="settings-input" type="number" id="ventMF" step="1" min="1" max="120">
                 </div>
                 <div class="status-card">
-                    <div class="status-label">Target FiO2 (%)</div>
-                    <div class="status-value" id="ventFiO2">--</div>
+                    <div class="status-label">Total Flow (slm)</div>
+                    <input class="settings-input" type="number" id="ventTF" step="1" min="1" max="120">
                 </div>
+                <div class="status-card">
+                    <div class="status-label">Vol Control</div>
+                    <select class="settings-input" id="ventVC" style="width:auto">
+                        <option value="1">Vt-based</option>
+                        <option value="0">Flow-based</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Pressure -->
+            <h3 style="color:#0078D7; margin:10px 0 5px 5px;">Pressure</h3>
+            <div class="status-panel">
+                <div class="status-card">
+                    <div class="status-label">Max Pressure (mbar)</div>
+                    <input class="settings-input" type="number" id="ventPI" step="1" min="5" max="80">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">PEEP (mbar)</div>
+                    <input class="settings-input" type="number" id="ventPE" step="0.5" min="0" max="30">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">P Ramp (ms)</div>
+                    <input class="settings-input" type="number" id="ventPR" step="10" min="10" max="500">
+                </div>
+            </div>
+
+            <!-- Gas -->
+            <h3 style="color:#0078D7; margin:10px 0 5px 5px;">Gas</h3>
+            <div class="status-panel">
+                <div class="status-card">
+                    <div class="status-label">Target FiO2 (%)</div>
+                    <input class="settings-input" type="number" id="ventFiO2" step="1" min="21" max="100">
+                </div>
+            </div>
+
+            <!-- Trigger -->
+            <h3 style="color:#0078D7; margin:10px 0 5px 5px;">Trigger</h3>
+            <div class="status-panel">
+                <div class="status-card">
+                    <div class="status-label">Trigger Enable</div>
+                    <select class="settings-input" id="ventTE" style="width:auto">
+                        <option value="0">Off</option>
+                        <option value="1">On</option>
+                    </select>
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Bias Flow (slm)</div>
+                    <input class="settings-input" type="number" id="ventBF" step="0.5" min="0" max="10">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Flow Trigger (slm)</div>
+                    <input class="settings-input" type="number" id="ventFT" step="0.5" min="0.5" max="10">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Press Trigger (mbar)</div>
+                    <input class="settings-input" type="number" id="ventPT" step="0.5" min="0.5" max="10">
+                </div>
+            </div>
+
+            <!-- Alarms -->
+            <h3 style="color:#0078D7; margin:10px 0 5px 5px;">Alarms</h3>
+            <div class="status-panel">
+                <div class="status-card">
+                    <div class="status-label">High P Alarm (mbar)</div>
+                    <input class="settings-input" type="number" id="ventAH" step="1" min="10" max="80">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Low P Alarm (mbar)</div>
+                    <input class="settings-input" type="number" id="ventAL" step="0.5" min="0" max="20">
+                </div>
+                <div class="status-card">
+                    <div class="status-label">Apnea Time (s)</div>
+                    <input class="settings-input" type="number" id="ventAA" step="1" min="5" max="60">
+                </div>
+            </div>
+
+            <!-- Read-only measurement cards -->
+            <div class="status-panel">
                 <div class="status-card">
                     <div class="status-label">Breath Count</div>
                     <div class="status-value" id="ventBreaths">--</div>
@@ -567,6 +837,9 @@ String PMixerWiFiServer::generateHtmlPage() {
             </div>
 
             <div class="button-container">
+                <button class="send-btn" onclick="sendVentSettings()">Send Settings</button>
+                <span class="settings-feedback" id="settingsFeedback"></span>
+                <br><br>
                 <button onclick="hideSettings()">Back to Monitor</button>
             </div>
         </div>
@@ -888,6 +1161,7 @@ String PMixerWiFiServer::generateHtmlPage() {
         function showSettings() {
             document.getElementById('mainView').style.display = 'none';
             document.getElementById('settingsView').style.display = 'block';
+            ventSettingsLoaded = false;  // Refresh inputs from ESP
             fetchVentilatorSettings();
             // Update settings every 1 second
             settingsInterval = setInterval(fetchVentilatorSettings, 1000);
@@ -902,26 +1176,134 @@ String PMixerWiFiServer::generateHtmlPage() {
             }
         }
 
+        let ventSettingsLoaded = false;  // Only populate inputs on first load
+
         async function fetchVentilatorSettings() {
             try {
                 const response = await fetch('/ventilator');
                 const data = await response.json();
 
-                document.getElementById('ventStatus').textContent = data.running ? 'ON' : 'OFF';
-                document.getElementById('ventStatus').style.color = data.running ? '#28a745' : '#dc3545';
+                // Update toggle button
+                const btn = document.getElementById('ventToggleBtn');
+                if (data.running) {
+                    btn.textContent = 'ON';
+                    btn.className = 'toggle-btn toggle-on';
+                } else {
+                    btn.textContent = 'OFF';
+                    btn.className = 'toggle-btn toggle-off';
+                }
+                btn.dataset.running = data.running ? '1' : '0';
+
                 document.getElementById('ventState').textContent = data.state;
-                document.getElementById('ventRR').textContent = data.respRate.toFixed(1);
-                document.getElementById('ventVT').textContent = data.tidalVolume.toFixed(0);
-                document.getElementById('ventIE').textContent = '1:' + (1/data.ieRatio).toFixed(1);
-                document.getElementById('ventPI').textContent = data.maxPressure.toFixed(1);
-                document.getElementById('ventPE').textContent = data.peep.toFixed(1);
-                document.getElementById('ventMF').textContent = data.maxFlow.toFixed(1);
-                document.getElementById('ventFiO2').textContent = data.targetFiO2.toFixed(0);
+
+                // Only populate input fields on first load (don't overwrite user edits)
+                if (!ventSettingsLoaded) {
+                    // Timing
+                    document.getElementById('ventRR').value = data.respRate.toFixed(1);
+                    document.getElementById('ventIE').value = data.ieRatio.toFixed(2);
+                    document.getElementById('ventIP').value = (data.inspPauseFraction || 0).toFixed(2);
+                    document.getElementById('ventI1').value = (data.insp1Fraction || 1).toFixed(2);
+                    document.getElementById('ventI2').value = (data.insp2Fraction || 0).toFixed(2);
+                    document.getElementById('ventEN').value = (data.expNonTrigFraction || 0.5).toFixed(2);
+                    document.getElementById('ventES').value = (data.expSyncFraction || 0).toFixed(2);
+                    // Volume/Flow
+                    document.getElementById('ventVT').value = data.tidalVolume.toFixed(0);
+                    document.getElementById('ventMF').value = data.maxFlow.toFixed(1);
+                    document.getElementById('ventTF').value = (data.totalFlow || 30).toFixed(1);
+                    document.getElementById('ventVC').value = data.useVolumeControl ? '1' : '0';
+                    // Pressure
+                    document.getElementById('ventPI').value = data.maxPressure.toFixed(1);
+                    document.getElementById('ventPE').value = data.peep.toFixed(1);
+                    document.getElementById('ventPR').value = (data.pressureRampTime || 100).toFixed(0);
+                    // Gas
+                    document.getElementById('ventFiO2').value = data.targetFiO2.toFixed(0);
+                    // Trigger
+                    document.getElementById('ventTE').value = data.triggerEnabled ? '1' : '0';
+                    document.getElementById('ventBF').value = (data.biasFlow || 2).toFixed(1);
+                    document.getElementById('ventFT').value = (data.flowTrigger || 2).toFixed(1);
+                    document.getElementById('ventPT').value = (data.pressureTrigger || 2).toFixed(1);
+                    // Alarms
+                    document.getElementById('ventAH').value = (data.highPressureAlarm || 40).toFixed(1);
+                    document.getElementById('ventAL').value = (data.lowPressureAlarm || 3).toFixed(1);
+                    document.getElementById('ventAA').value = (data.apneaTime || 20).toFixed(1);
+                    ventSettingsLoaded = true;
+                }
+
+                // Always update read-only fields
                 document.getElementById('ventBreaths').textContent = data.breathCount;
                 document.getElementById('ventPkP').textContent = data.peakPressure.toFixed(1);
                 document.getElementById('ventMVt').textContent = data.measuredVt.toFixed(0);
             } catch (error) {
                 console.error('Error fetching ventilator settings:', error);
+            }
+        }
+
+        async function sendVentSettings() {
+            const params = new URLSearchParams();
+            // Timing
+            params.append('rr', document.getElementById('ventRR').value);
+            params.append('ie', document.getElementById('ventIE').value);
+            params.append('ip', document.getElementById('ventIP').value);
+            params.append('i1', document.getElementById('ventI1').value);
+            params.append('i2', document.getElementById('ventI2').value);
+            params.append('en', document.getElementById('ventEN').value);
+            params.append('es', document.getElementById('ventES').value);
+            // Volume/Flow
+            params.append('vt', document.getElementById('ventVT').value);
+            params.append('mf', document.getElementById('ventMF').value);
+            params.append('tf', document.getElementById('ventTF').value);
+            params.append('vc', document.getElementById('ventVC').value);
+            // Pressure
+            params.append('pi', document.getElementById('ventPI').value);
+            params.append('pe', document.getElementById('ventPE').value);
+            params.append('pr', document.getElementById('ventPR').value);
+            // Gas
+            params.append('fi', document.getElementById('ventFiO2').value);
+            // Trigger
+            params.append('te', document.getElementById('ventTE').value);
+            params.append('bf', document.getElementById('ventBF').value);
+            params.append('ft', document.getElementById('ventFT').value);
+            params.append('pt', document.getElementById('ventPT').value);
+            // Alarms
+            params.append('ah', document.getElementById('ventAH').value);
+            params.append('al', document.getElementById('ventAL').value);
+            params.append('aa', document.getElementById('ventAA').value);
+
+            try {
+                const response = await fetch('/ventilator/set', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: params.toString()
+                });
+                const result = await response.json();
+                const fb = document.getElementById('settingsFeedback');
+                if (result.ok) {
+                    fb.textContent = 'Sent!';
+                    fb.style.color = '#28a745';
+                } else {
+                    fb.textContent = 'Error';
+                    fb.style.color = '#dc3545';
+                }
+                fb.style.opacity = 1;
+                setTimeout(() => { fb.style.opacity = 0; }, 2000);
+                // Reload current values from ESP after sending
+                ventSettingsLoaded = false;
+            } catch (error) {
+                console.error('Error sending settings:', error);
+            }
+        }
+
+        async function toggleVentilator() {
+            const btn = document.getElementById('ventToggleBtn');
+            const newState = btn.dataset.running === '1' ? 0 : 1;
+            try {
+                await fetch('/ventilator/set', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                    body: 'vo=' + newState
+                });
+            } catch (error) {
+                console.error('Error toggling ventilator:', error);
             }
         }
 
