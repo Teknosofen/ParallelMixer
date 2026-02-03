@@ -34,7 +34,7 @@ struct SystemConfig {
   uint32_t delta_t;                    // GUI/Serial output interval in microseconds (T command)
   uint32_t control_interval;           // Control system execution interval in microseconds (X command)
   uint32_t PressSamplTime;             // ABP2 pressure sampling time in microseconds (default: 10000 = 100Hz)
-  int16_t quiet_mode;                  // 0=verbose, 1=quiet, 3-7=special modes
+  int16_t quiet_mode;                  // 0=verbose, 1=quiet, 2-8=special modes
   float digital_flow_reference;        // Digital flow reference in L/min
   uint8_t mux_channel;                 // Current MUX channel (0-5), see MuxChannel enum
 };

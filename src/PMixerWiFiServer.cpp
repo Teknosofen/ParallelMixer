@@ -21,6 +21,8 @@ PMixerWiFiServer::PMixerWiFiServer(String ssid, String password)
     _currentHistory.reserve(_maxDataPoints);
     _lowPressureHistory.reserve(_maxDataPoints);
     _temperatureHistory.reserve(_maxDataPoints);
+    _flow2History.reserve(_maxDataPoints);
+    _pressure2History.reserve(_maxDataPoints);
 }
 
 void PMixerWiFiServer::start() {
@@ -115,7 +117,8 @@ void PMixerWiFiServer::updateVentilatorSettings(bool running, const char* state,
 }
 
 void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, float current,
-                                     float lowPressure, float temperature) {
+                                     float lowPressure, float temperature,
+                                     float flow2, float pressure2) {
     unsigned long timestamp = millis();
 
     // Add to main history
@@ -126,11 +129,13 @@ void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, fl
     _currentHistory.push_back(current);
     _lowPressureHistory.push_back(lowPressure);
     _temperatureHistory.push_back(temperature);
+    _flow2History.push_back(flow2);
+    _pressure2History.push_back(pressure2);
 
     // Also add to buffer for high-speed web transfer
     // Safety limit: prevent unbounded growth if client disconnects
-    // 4000 samples = ~2s at 2kHz, ~4s at 1kHz, ~200KB memory
-    const size_t MAX_BUFFER_SIZE = 4000;
+    // 3000 samples with 9 arrays = ~108KB memory (reduced from 4000 after adding Bus 1 data)
+    const size_t MAX_BUFFER_SIZE = 3000;
     if (_bufferTimestamps.size() < MAX_BUFFER_SIZE) {
         _bufferTimestamps.push_back(timestamp);
         _bufferFlow.push_back(flow);
@@ -139,6 +144,8 @@ void PMixerWiFiServer::addDataPoint(float flow, float pressure, float signal, fl
         _bufferCurrent.push_back(current);
         _bufferLowPressure.push_back(lowPressure);
         _bufferTemperature.push_back(temperature);
+        _bufferFlow2.push_back(flow2);
+        _bufferPressure2.push_back(pressure2);
     }
     // When buffer full, new data is dropped until client fetches
 
@@ -154,6 +161,8 @@ void PMixerWiFiServer::trimDataHistory() {
         _currentHistory.erase(_currentHistory.begin());
         _lowPressureHistory.erase(_lowPressureHistory.begin());
         _temperatureHistory.erase(_temperatureHistory.begin());
+        _flow2History.erase(_flow2History.begin());
+        _pressure2History.erase(_pressure2History.begin());
     }
 }
 
@@ -220,7 +229,10 @@ String PMixerWiFiServer::generateDataJson() {
 }
 
 String PMixerWiFiServer::generateHistoryJson() {
-    String json = "{";
+    // Pre-reserve: ~80 bytes per sample (9 arrays * ~8 chars + timestamp ~12 chars + commas)
+    String json;
+    json.reserve(100 + _timestamps.size() * 85);
+    json = "{";
     json += "\"timestamps\":[";
     for (size_t i = 0; i < _timestamps.size(); i++) {
         if (i > 0) json += ",";
@@ -256,12 +268,25 @@ String PMixerWiFiServer::generateHistoryJson() {
         if (i > 0) json += ",";
         json += String(_temperatureHistory[i], 1);
     }
+    json += "],\"flow2\":[";
+    for (size_t i = 0; i < _flow2History.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_flow2History[i], 2);
+    }
+    json += "],\"pressure2\":[";
+    for (size_t i = 0; i < _pressure2History.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_pressure2History[i], 2);
+    }
     json += "]}";
     return json;
 }
 
 String PMixerWiFiServer::generateBufferJson() {
-    String json = "{";
+    // Pre-reserve: ~85 bytes per sample (9 arrays * ~8 chars + timestamp ~12 chars + commas)
+    String json;
+    json.reserve(100 + _bufferTimestamps.size() * 85);
+    json = "{";
     json += "\"count\":" + String(_bufferTimestamps.size()) + ",";
     json += "\"mode\":\"" + _currentMode + "\",";
     json += "\"timestamps\":[";
@@ -299,6 +324,16 @@ String PMixerWiFiServer::generateBufferJson() {
         if (i > 0) json += ",";
         json += String(_bufferCurrent[i], 3);
     }
+    json += "],\"flow2\":[";
+    for (size_t i = 0; i < _bufferFlow2.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferFlow2[i], 2);
+    }
+    json += "],\"pressure2\":[";
+    for (size_t i = 0; i < _bufferPressure2.size(); i++) {
+        if (i > 0) json += ",";
+        json += String(_bufferPressure2[i], 2);
+    }
     json += "]}";
 
     // Clear the buffer after sending
@@ -309,6 +344,8 @@ String PMixerWiFiServer::generateBufferJson() {
     _bufferTemperature.clear();
     _bufferValve.clear();
     _bufferCurrent.clear();
+    _bufferFlow2.clear();
+    _bufferPressure2.clear();
 
     return json;
 }
@@ -537,7 +574,9 @@ String PMixerWiFiServer::generateHtmlPage() {
             valve: [],
             current: [],
             lowPressure: [],
-            temperature: []
+            temperature: [],
+            flow2: [],
+            pressure2: []
         };
 
         // Chart setup
@@ -600,6 +639,26 @@ String PMixerWiFiServer::generateHtmlPage() {
                         tension: 0.3,
                         pointRadius: 0,
                         borderWidth: 2
+                    },
+                    {
+                        label: 'Flow (Bus 1)',
+                        data: [],
+                        borderColor: '#00BFFF',
+                        backgroundColor: 'rgba(0, 191, 255, 0.1)',
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2,
+                        borderDash: [5, 3]
+                    },
+                    {
+                        label: 'Pressure (Bus 1)',
+                        data: [],
+                        borderColor: '#FF4500',
+                        backgroundColor: 'rgba(255, 69, 0, 0.1)',
+                        tension: 0.3,
+                        pointRadius: 0,
+                        borderWidth: 2,
+                        borderDash: [5, 3]
                     }
                 ]
             },
@@ -684,6 +743,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                     dataHistory.current.push(data.current[i]);
                     dataHistory.lowPressure.push(data.lowPressure[i]);
                     dataHistory.temperature.push(data.temperature[i]);
+                    dataHistory.flow2.push(data.flow2[i]);
+                    dataHistory.pressure2.push(data.pressure2[i]);
 
                     // Add all points to chart
                     chart.data.labels.push(timeInSeconds);
@@ -693,6 +754,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                     chart.data.datasets[3].data.push(data.temperature[i]);
                     chart.data.datasets[4].data.push(data.valve[i]);
                     chart.data.datasets[5].data.push(data.current[i]);
+                    chart.data.datasets[6].data.push(data.flow2[i]);
+                    chart.data.datasets[7].data.push(data.pressure2[i]);
                 }
 
                 // Trim chart to max points
@@ -721,6 +784,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                 dataHistory.current = history.current;
                 dataHistory.lowPressure = history.lowPressure;
                 dataHistory.temperature = history.temperature;
+                dataHistory.flow2 = history.flow2 || [];
+                dataHistory.pressure2 = history.pressure2 || [];
 
                 // Populate chart with configured number of points
                 const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
@@ -734,6 +799,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                     chart.data.datasets[3].data.push(history.temperature[i]);
                     chart.data.datasets[4].data.push(history.valve[i]);
                     chart.data.datasets[5].data.push(history.current[i]);
+                    chart.data.datasets[6].data.push(history.flow2 ? history.flow2[i] : 0);
+                    chart.data.datasets[7].data.push(history.pressure2 ? history.pressure2[i] : 0);
                 }
                 chart.update();
             } catch (error) {
@@ -748,7 +815,7 @@ String PMixerWiFiServer::generateHtmlPage() {
                 return;
             }
 
-            let txt = 'Timestamp (ms)\tFlow\tPressure\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\n';
+            let txt = 'Timestamp (ms)\tFlow\tPressure\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\tFlow (Bus 1)\tPressure (Bus 1)\n';
 
             for (let i = 0; i < dataHistory.timestamps.length; i++) {
                 txt += dataHistory.timestamps[i] + '\t';
@@ -757,7 +824,9 @@ String PMixerWiFiServer::generateHtmlPage() {
                 txt += dataHistory.lowPressure[i].toFixed(2) + '\t';
                 txt += dataHistory.temperature[i].toFixed(1) + '\t';
                 txt += dataHistory.valve[i].toFixed(2) + '\t';
-                txt += dataHistory.current[i].toFixed(3) + '\n';
+                txt += dataHistory.current[i].toFixed(3) + '\t';
+                txt += (dataHistory.flow2[i] || 0).toFixed(2) + '\t';
+                txt += (dataHistory.pressure2[i] || 0).toFixed(2) + '\n';
             }
 
             // Create download
@@ -799,6 +868,8 @@ String PMixerWiFiServer::generateHtmlPage() {
                 dataHistory.current = [];
                 dataHistory.lowPressure = [];
                 dataHistory.temperature = [];
+                dataHistory.flow2 = [];
+                dataHistory.pressure2 = [];
             }
         }
 

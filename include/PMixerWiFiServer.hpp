@@ -41,7 +41,8 @@ public:
                                    float peakPressure, float measuredVt);
 
     // High-speed data buffering - call this at your control rate for high-speed web updates
-    void addDataPoint(float flow, float pressure, float signal, float current, float lowPressure, float temperature);
+    void addDataPoint(float flow, float pressure, float signal, float current, float lowPressure, float temperature,
+                      float flow2, float pressure2);
 
     // Configuration
     void setMaxDataPoints(int points) { _maxDataPoints = points; }
@@ -85,6 +86,8 @@ private:
     std::vector<float> _currentHistory;
     std::vector<float> _lowPressureHistory;
     std::vector<float> _temperatureHistory;
+    std::vector<float> _flow2History;       // Bus 1 flow
+    std::vector<float> _pressure2History;   // Bus 1 pressure
 
     // High-speed data buffer (for buffering data between client requests)
     std::vector<unsigned long> _bufferTimestamps;
@@ -94,6 +97,8 @@ private:
     std::vector<float> _bufferCurrent;
     std::vector<float> _bufferLowPressure;
     std::vector<float> _bufferTemperature;
+    std::vector<float> _bufferFlow2;       // Bus 1 flow
+    std::vector<float> _bufferPressure2;   // Bus 1 pressure
 
     // Server setup
     void setupWebServer();

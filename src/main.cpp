@@ -174,32 +174,20 @@ void outputData() {
                      actuator.getValveControlSignal());
       break;
 
-    case 5:  // Flow, Supply Pressure, Low Pressure, Temp, and SFM3505 Air
-      hostCom.printf("Flow: %.2f SupplyP: %.2f LowP: %.2f Temp: %.1f SFM3505_Air: %.3f\n",
-                     sensorData_bus0.flow,
-                     sensorData_bus0.supply_pressure,
-                     sensorData_bus0.abpd_pressure,
-                     sensorData_bus0.abpd_temperature,
-                     sensorData_bus0.sfm3505_air_flow);
-      break;
-
-    // Combined output: Time_ms, SupplyP, LowP, Temp, Bus0_O2, Bus0_Air, Bus1_O2, Bus1_Air, Valve%, Current, FDO2_hPa, FDO2_%
-    case 6:  // SFM3505 dual bus + Q7 data (tab-separated)
+    case 5:  // Labeled: same data as q6, with labels for readability
       {
         float localValveCtrl = actuator.getValveControlSignal();
         float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
         float o2_hPa = fdo2Initialized ? fdo2Data.oxygenPartialPressure_hPa : -9.9f;
         float o2_percent = fdo2Initialized ?
           fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
-        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.3f\t%.3f\t%.3f\t%.2f\t%.3f\t%.2f\t%.2f\n",
-                       millis(),
+        hostCom.printf("SP0:%.2f LP:%.2f T:%.1f Air0:%.3f Air1:%.3f SP1:%.2f V:%.2f I:%.3f O2:%.2fhPa %.2f%%\n",
                        sensorData_bus0.supply_pressure,
                        sensorData_bus0.abpd_pressure,
                        sensorData_bus0.abpd_temperature,
-                       sensorData_bus0.sfm3505_o2_flow,
                        sensorData_bus0.sfm3505_air_flow,
-                       sensorData_bus1.sfm3505_o2_flow,
                        sensorData_bus1.sfm3505_air_flow,
+                       sensorData_bus1.supply_pressure,
                        localValveCtrl,
                        actuatorCurrent,
                        o2_hPa,
@@ -207,20 +195,22 @@ void outputData() {
       }
       break;
 
-    // High-speed TSV: Time_ms, SupplyP, LowP, Temp, AirFlow, Valve%, Current, O2_hPa, O2%
-    case 7:  // High-speed data logging: tab-separated, no labels (minimal bandwidth)
+    // High-speed TSV: Time_ms, SupplyP0, LowP, Temp, Air0, Air1, SupplyP1, Valve%, Current, O2_hPa, O2%
+    case 6:  // High-speed data logging: tab-separated, no labels (minimal bandwidth)
       {
         float localValveCtrl = actuator.getValveControlSignal();
         float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
         float o2_hPa = fdo2Initialized ? fdo2Data.oxygenPartialPressure_hPa : -9.9f;
         float o2_percent = fdo2Initialized ?
           fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
-        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.2f\t%.3f\t%.2f\t%.2f\n",
+        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.3f\t%.2f\t%.2f\t%.3f\t%.2f\t%.2f\n",
                        millis(),
                        sensorData_bus0.supply_pressure,
                        sensorData_bus0.abpd_pressure,
                        sensorData_bus0.abpd_temperature,
                        sensorData_bus0.sfm3505_air_flow,
+                       sensorData_bus1.sfm3505_air_flow,
+                       sensorData_bus1.supply_pressure,
                        localValveCtrl,
                        actuatorCurrent,
                        o2_hPa,
@@ -228,7 +218,7 @@ void outputData() {
       }
       break;
 
-    case 8:  // FDO2 Oxygen Sensor data
+    case 7:  // FDO2 Oxygen Sensor data
       if (fdo2Initialized) {
         hostCom.printf("O2: %.2f hPa (%.2f%%) | Temp: %.1f°C | Status: 0x%02X %s\n",
                        fdo2Data.oxygenPartialPressure_hPa,
@@ -242,7 +232,7 @@ void outputData() {
       }
       break;
 
-    case 9:  // FDO2 Extended/Raw data
+    case 8:  // FDO2 Extended/Raw data
       if (fdo2Initialized) {
         hostCom.printf("O2: %.2f hPa | T: %.1f°C | Phase: %.3f° | Signal: %.1f mV | Amb: %.1f mV | P: %.1f mbar | RH: %.1f%%\n",
                        fdo2Data.oxygenPartialPressure_hPa,
@@ -712,7 +702,9 @@ void loop() {
                            actuator.getValveControlSignal(),
                            muxRouter.getCurrent(sysConfig.mux_channel),
                            sensorData_bus0.abpd_pressure,
-                           sensorData_bus0.abpd_temperature);
+                           sensorData_bus0.abpd_temperature,
+                           sensorData_bus1.sfm3505_air_flow,
+                           sensorData_bus1.supply_pressure);
   }
 
   // ============================================================================

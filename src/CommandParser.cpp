@@ -190,7 +190,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
     case 'Q': case 'q':  // Quiet mode
       if (params.length() > 0) {
         config.quiet_mode = params.toInt();
-        if (config.quiet_mode > 9) config.quiet_mode = 1;  // Supports 0-9
+        if (config.quiet_mode > 8) config.quiet_mode = 1;  // Supports 0-8
         Serial.print("Q= ");
         Serial.print(config.quiet_mode);
         sendOK();
