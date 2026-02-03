@@ -169,7 +169,7 @@ void ImageRenderer::drawStatusField() {
     tft.setFreeFont(FSS9);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
-    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 160, 10, TFT_WHITE);  // Increased height for Flow2
+    tft.drawRoundRect(statusRectPos.x, statusRectPos.y, 160, 185, 10, TFT_WHITE);  // Increased height for Pressure2
     tft.drawString("Status", statusLabelPos.x, statusLabelPos.y);
 }
 
@@ -233,11 +233,11 @@ void ImageRenderer::drawFlow(const String& flow) {
     // Clear previous text by drawing background rectangle
     tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
     tft.setFreeFont(FSS9);
-    tft.drawString("Flow: " + oldFlow, statusFlowPos.x, statusFlowPos.y, 2);
+    tft.drawString("Flow0: " + oldFlow, statusFlowPos.x, statusFlowPos.y, 2);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
     // Draw the flow string
-    tft.drawString("Flow: " + flow, statusFlowPos.x, statusFlowPos.y, 2);
+    tft.drawString("Flow0: " + flow, statusFlowPos.x, statusFlowPos.y, 2);
     oldFlow = flow;
 }
 
@@ -246,11 +246,11 @@ void ImageRenderer::drawFlow2(const String& flow) {
     // Clear previous text by drawing background rectangle
     tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
     tft.setFreeFont(FSS9);
-    tft.drawString("Flow2: " + oldFlow2, statusFlow2Pos.x, statusFlow2Pos.y, 2);
+    tft.drawString("Flow1: " + oldFlow2, statusFlow2Pos.x, statusFlow2Pos.y, 2);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
     tft.setTextSize(1);
     // Draw the Bus 1 flow string
-    tft.drawString("Flow2: " + flow, statusFlow2Pos.x, statusFlow2Pos.y, 2);
+    tft.drawString("Flow1: " + flow, statusFlow2Pos.x, statusFlow2Pos.y, 2);
     oldFlow2 = flow;
 }
 
@@ -265,6 +265,19 @@ void ImageRenderer::drawPressure(const String& pressure) {
     // Draw the pressure string
     tft.drawString(pressure, statusPressurePos.x, statusPressurePos.y, 2);
     oldPressure = pressure;
+}
+
+void ImageRenderer::drawPressure2(const String& pressure) {
+    static String oldPressure2 = "0.0";
+    // Clear previous text by drawing background rectangle
+    tft.setTextColor(TFT_LOGOBACKGROUND, TFT_LOGOBACKGROUND);
+    tft.setFreeFont(FSS9);
+    tft.drawString("P1: " + oldPressure2, statusPressure2Pos.x, statusPressure2Pos.y, 2);
+    tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);
+    tft.setTextSize(1);
+    // Draw the Bus 1 pressure string
+    tft.drawString("P1: " + pressure, statusPressure2Pos.x, statusPressure2Pos.y, 2);
+    oldPressure2 = pressure;
 }
 
 void ImageRenderer::drawValveCtrlSignal(const String& signal) {
@@ -331,21 +344,24 @@ void ImageRenderer::initPositions() {
     statusPressurePos.x = statusLabelPos.x;
     statusPressurePos.y = statusLabelPos.y + 60;
 
+    statusPressure2Pos.x = statusLabelPos.x;
+    statusPressure2Pos.y = statusLabelPos.y + 80;  // Bus 1 pressure below Bus 0 pressure
+
     statusValveCtrlSignalPos.x = statusLabelPos.x;
-    statusValveCtrlSignalPos.y = statusLabelPos.y + 80;
+    statusValveCtrlSignalPos.y = statusLabelPos.y + 100;
 
     statusControllerModePos.x = statusLabelPos.x;
-    statusControllerModePos.y = statusLabelPos.y + 100;
+    statusControllerModePos.y = statusLabelPos.y + 120;
 
     statusCurrentPos.x = statusLabelPos.x;
-    statusCurrentPos.y = statusLabelPos.y + 120;
+    statusCurrentPos.y = statusLabelPos.y + 140;
 
     statusO2Pos.x = statusLabelPos.x;
-    statusO2Pos.y = statusLabelPos.y + 140;
+    statusO2Pos.y = statusLabelPos.y + 160;
 
     // WiFi section at bottom
     wiFiRectPos.x = 5;
-    wiFiRectPos.y = 240;
+    wiFiRectPos.y = 250;
 
     wiFiLabelPos.x = wiFiRectPos.x + 5;
     wiFiLabelPos.y = wiFiRectPos.y - 10;

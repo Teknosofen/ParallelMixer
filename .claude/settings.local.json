@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(pio run:*)",
-      "Bash(pio pkg list:*)"
+      "Bash(pio pkg list:*)",
+      "Bash(python:*)"
     ]
   }
 }

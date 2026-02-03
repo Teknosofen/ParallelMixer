@@ -1,4 +1,5 @@
 #include "PMixerWiFiServer.hpp"
+#include "chart_js_min_gz.h"
 
 WebServer server(80);
 
@@ -172,6 +173,12 @@ void PMixerWiFiServer::setupWebServer() {
     server.on("/history", [this]() { handleHistory(); });
     server.on("/dataBuffer", [this]() { handleDataBuffer(); });
     server.on("/ventilator", [this]() { handleVentilatorSettings(); });
+    // Serve Chart.js from PROGMEM (gzip compressed) for offline operation
+    server.on("/chart.min.js", []() {
+        server.sendHeader("Content-Encoding", "gzip");
+        server.sendHeader("Cache-Control", "public, max-age=86400");
+        server.send_P(200, "application/javascript", (const char*)chart_js_gz, chart_js_gz_len);
+    });
 }
 
 void PMixerWiFiServer::handleVentilatorSettings() {
@@ -357,7 +364,7 @@ String PMixerWiFiServer::generateHtmlPage() {
 <head>
     <title>P-Mixer Control</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="/chart.min.js"></script>
     <style>
         body {
             background-color: #84B6D6;
@@ -466,11 +473,11 @@ String PMixerWiFiServer::generateHtmlPage() {
                 <div class="status-value" id="flow2Value">--</div>
             </div>
             <div class="status-card">
-                <div class="status-label">Pressure (Bus 0)</div>
+                <div class="status-label">Press (Bus 0)</div>
                 <div class="status-value" id="pressureValue">--</div>
             </div>
             <div class="status-card">
-                <div class="status-label">Pressure (Bus 1)</div>
+                <div class="status-label">Press (Bus 1)</div>
                 <div class="status-value" id="pressure2Value">--</div>
             </div>
             <div class="status-card">
@@ -587,7 +594,7 @@ String PMixerWiFiServer::generateHtmlPage() {
                 labels: [],
                 datasets: [
                     {
-                        label: 'Flow',
+                        label: 'Flow (Bus 0)',
                         data: [],
                         borderColor: '#0078D7',
                         backgroundColor: 'rgba(0, 120, 215, 0.1)',
@@ -596,7 +603,7 @@ String PMixerWiFiServer::generateHtmlPage() {
                         borderWidth: 2
                     },
                     {
-                        label: 'Pressure',
+                        label: 'Press (Bus 0)',
                         data: [],
                         borderColor: '#FF6B6B',
                         backgroundColor: 'rgba(255, 107, 107, 0.1)',
@@ -651,7 +658,7 @@ String PMixerWiFiServer::generateHtmlPage() {
                         borderDash: [5, 3]
                     },
                     {
-                        label: 'Pressure (Bus 1)',
+                        label: 'Press (Bus 1)',
                         data: [],
                         borderColor: '#FF4500',
                         backgroundColor: 'rgba(255, 69, 0, 0.1)',
@@ -815,7 +822,7 @@ String PMixerWiFiServer::generateHtmlPage() {
                 return;
             }
 
-            let txt = 'Timestamp (ms)\tFlow\tPressure\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\tFlow (Bus 1)\tPressure (Bus 1)\n';
+            let txt = 'Timestamp (ms)\tFlow (Bus 0)\tPress (Bus 0)\tLow Pressure\tTemperature (°C)\tValve Signal\tCurrent (A)\tFlow (Bus 1)\tPress (Bus 1)\n';
 
             for (let i = 0; i < dataHistory.timestamps.length; i++) {
                 txt += dataHistory.timestamps[i] + '\t';

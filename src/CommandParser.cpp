@@ -93,6 +93,33 @@ void CommandParser::printHelp() {
   Serial.println("M for MUX channel selection (0-5)");
   Serial.println("  0=Direct, 1=AirValve, 2=O2Valve, 3=ExpValve, 4=NC, 5=Blower");
   Serial.println("! lists current settings");
+  Serial.println();
+  Serial.println("Ventilator commands:");
+  Serial.println("-------------------");
+  Serial.println("VS ventilator status");
+  Serial.println("VO1/VO0 ventilator on/off");
+  Serial.println("RR respiratory rate [BPM] float");
+  Serial.println("IE I:E ratio [-] float (e.g. 0.5 = 1:2)");
+  Serial.println("VT tidal volume [mL] float");
+  Serial.println("MF max inspiratory flow [SLM] float");
+  Serial.println("TF total flow [SLM] float (when VC=0)");
+  Serial.println("VC volume control mode (1=Vt-based, 0=flow-based)");
+  Serial.println("PI max pressure / PIP limit [mbar] float");
+  Serial.println("PE PEEP [mbar] float");
+  Serial.println("PR pressure ramp time [ms] float");
+  Serial.println("FI FiO2 [%] float (e.g. FI21 = 21%)");
+  Serial.println("IP inspiratory pause fraction [0-0.5] float");
+  Serial.println("I1 insp phase 1 fraction [0-1] float");
+  Serial.println("I2 insp phase 2 fraction [0-1] float");
+  Serial.println("EN exp non-trigger fraction [0-1] float");
+  Serial.println("ES exp sync fraction [0-1] float");
+  Serial.println("TE trigger enable (1=on, 0=off)");
+  Serial.println("BF bias flow [SLM] float");
+  Serial.println("FT flow trigger threshold [SLM] float");
+  Serial.println("PT pressure trigger threshold [mbar] float");
+  Serial.println("AH high pressure alarm [mbar] float");
+  Serial.println("AL low pressure alarm [mbar] float");
+  Serial.println("AA apnea alarm time [s] float");
 }
 
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,

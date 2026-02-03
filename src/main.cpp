@@ -834,11 +834,13 @@ void loop() {
       // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
       renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air Bus 0
       renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air Bus 1
-      // Show both supply pressure (ABP2) and low pressure (ABPD) with temperature
-      String pressureStr = "HP: " + String(sensorData_bus0.supply_pressure, 1) + " LP: " +
+      // Show Bus 0 supply pressure (ABP2) in bar, low pressure (ABPD), and temperature
+      String pressureStr = "P0: " + String(sensorData_bus0.supply_pressure / 100.0, 2) + " LP: " +
                            String(sensorData_bus0.abpd_pressure, 1) + " " +
                            String(sensorData_bus0.abpd_temperature, 1) + " C";
       renderer.drawPressure(pressureStr);
+      // Show Bus 1 supply pressure (ABP2)
+      renderer.drawPressure2(String(sensorData_bus1.supply_pressure / 100.0, 2) + " bar");
       renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
       // Show current from selected MUX channel
       renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
