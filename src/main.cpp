@@ -486,6 +486,7 @@ void loop() {
     renderer.drawLabel();
     renderer.drawStatusField();
     renderer.drawWiFiField();
+    renderer.drawWiFiStatusDot(wifiServer.hasClients());
     renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
     renderer.drawWiFiPromt("Long press: enable");
   }
@@ -845,6 +846,9 @@ void loop() {
       renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
       // Show current from selected MUX channel
       renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
+
+      // Update WiFi client connection indicator
+      renderer.drawWiFiStatusDot(wifiServer.hasClients());
     }
   }
 
@@ -924,6 +928,7 @@ void loop() {
         renderer.drawLabel();
         renderer.drawStatusField();
         renderer.drawWiFiField();
+        renderer.drawWiFiStatusDot(wifiServer.hasClients());
         if (wifiServer.isRunning()) {
           renderer.drawWiFiAPIP(wifiServer.getApIpAddress(), PMIXERSSID);
           renderer.drawWiFiPromt("Short press: disable");

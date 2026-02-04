@@ -27,6 +27,7 @@ public:
     
     void drawStatusField();
     void drawWiFiField();
+    void drawWiFiStatusDot(bool connected);
     void drawWiFiAPIP(String drawWiFiAPIP, String wiFiSSID);
     void drawWiFiPromt(String WiFiPrompt);
     void drawControllerMode(const String& mode);

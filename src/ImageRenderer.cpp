@@ -165,6 +165,13 @@ void ImageRenderer::drawWiFiField() {
     tft.drawString("WiFi", wiFiLabelPos.x, wiFiLabelPos.y);
 }
 
+void ImageRenderer::drawWiFiStatusDot(bool connected) {
+    int dotX = wiFiLabelPos.x + 40;  // right after "WiFi" text
+    int dotY = wiFiLabelPos.y + 7;   // vertically centered with label
+    uint16_t color = connected ? TFT_GREEN : TFT_LOGOBACKGROUND;
+    tft.fillCircle(dotX, dotY, 3, color);
+}
+
 void ImageRenderer::drawStatusField() {
     tft.setFreeFont(FSS9);
     tft.setTextColor(TFT_DEEPBLUE, TFT_LOGOBACKGROUND);

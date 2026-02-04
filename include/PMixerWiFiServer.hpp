@@ -23,6 +23,7 @@ public:
     void stop();
     void handleClient();
     bool isRunning() const { return _running; }
+    bool hasClients() const { return _running && WiFi.softAPgetStationNum() > 0; }
     String getApIpAddress() const;
     
     // Data update methods - call these to push data to clients
