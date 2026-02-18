@@ -234,6 +234,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
           pidConfig.i_gain = params.toFloat();
           actuator.setPIDConfig(pidConfig);
           actuator.resetPIDState();
+          Serial.print("I= ");
           Serial.print(pidConfig.i_gain, 4);
           sendOK();
         } else {
@@ -249,6 +250,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
         if (params.length() > 0) {
           pidConfig.p_gain = params.toFloat();
           actuator.setPIDConfig(pidConfig);
+          Serial.print("P= ");
           Serial.print(pidConfig.p_gain, 4);
           sendOK();
         } else {
@@ -264,6 +266,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
         if (params.length() > 0) {
           pidConfig.d_gain = params.toFloat();
           actuator.setPIDConfig(pidConfig);
+          Serial.print("D= ");
           Serial.print(pidConfig.d_gain, 4);
           sendOK();
         } else {
@@ -293,6 +296,7 @@ void CommandParser::processCommands(SystemConfig& config, ActuatorControl& actua
         int mode = params.toInt();
         if (mode >= 0 && mode <= 5) {
           actuator.setControllerMode((ControllerMode)mode);
+          Serial.print("C= ");
           Serial.print(mode);
           sendOK();
         } else {

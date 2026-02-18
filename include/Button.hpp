@@ -1,4 +1,6 @@
-#pragma once
+#ifndef BUTTON_HPP
+#define BUTTON_HPP
+
 #include <Arduino.h>
 
 class Button {
@@ -26,3 +28,5 @@ private:
 
     bool _longPressFlag = false;
 };
+
+#endif // BUTTON_HPP

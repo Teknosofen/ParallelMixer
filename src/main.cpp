@@ -477,389 +477,291 @@ void setup() {
   hostCom.println("Commands: ? = help, ! = settings\n");
 }
 
-void loop() {
-  // Initialize display on first loop
-  static bool initLoop = false;
-  if (!initLoop) {
-    initLoop = true;
-    renderer.clear();
-    renderer.drawLabel();
-    renderer.drawStatusField();
-    renderer.drawWiFiField();
-    renderer.drawWiFiStatusDot(wifiServer.hasClients());
-    renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
-    renderer.drawWiFiPromt("Long press: enable");
-  }
+// ============================================================================
+// Extracted subsystem functions
+// ============================================================================
 
-  // ============================================================================
-  // ABP2 Pressure Sensor - Asynchronous Measurement (100Hz with 200Hz loop)
-  // ============================================================================
+/** Initialize the TFT display layout on first loop iteration. */
+void initDisplay() {
+  renderer.clear();
+  renderer.drawLabel();
+  renderer.drawStatusField();
+  renderer.drawWiFiField();
+  renderer.drawWiFiStatusDot(wifiServer.hasClients());
+  renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
+  renderer.drawWiFiPromt("Long press: enable");
+}
+
+/** ABP2 Pressure Sensor on Bus 0 - Asynchronous two-phase read. */
+void pollPressureSensors(uint32_t now) {
   static uint32_t lastPressureTime = 0;
   static bool pressureCommandSent = false;
-  uint32_t currentTime = micros();
 
-  // Check if it's time to handle pressure measurement (only if ABP2 detected)
-  if (sensorsInitialized && sensors_bus0->hasABP2() && (currentTime - lastPressureTime) >= sysConfig.PressSamplTime) {
-    lastPressureTime = currentTime;
+  if (sensorsInitialized && sensors_bus0->hasABP2() && (now - lastPressureTime) >= sysConfig.PressSamplTime) {
+    lastPressureTime = now;
 
     if (!pressureCommandSent) {
-      // Send measurement command (0xAA 0x00 0x00)
       sensors_bus0->startABP2Measurement();
       pressureCommandSent = true;
     } else {
-      // Read result (5ms after command, which happens automatically due to 10ms cycle)
       float pressure;
       uint8_t status;
       if (sensors_bus0->readABP2Pressure(pressure, status)) {
         sensorData_bus0.supply_pressure = pressure;
       }
-      pressureCommandSent = false;  // Next cycle will send command again
+      pressureCommandSent = false;
     }
   } else if (!sensors_bus0->hasABP2()) {
-    // No ABP2 detected - set to invalid indicator
     sensorData_bus0.supply_pressure = -9.9;
   }
+}
 
-  // ============================================================================
-  // Control system execution timing (X command - typically faster)
-  // ============================================================================
-
-  if ((micros() - control_past_time) >= sysConfig.control_interval) {
-    control_past_time = micros();
-
-    // ========================================================================
-    // Read SFM3505 Flow Sensor (now in fast control loop)
-    // ========================================================================
-    if (sensorsInitialized && sensors_bus0->hasSFM3505()) {
-      float sfm_air, sfm_o2;
-      if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-        sensorData_bus0.sfm3505_air_flow = sfm_air;
-        sensorData_bus0.sfm3505_o2_flow = sfm_o2;
-      } else {
-        sensorData_bus0.sfm3505_air_flow = -9.9;
-        sensorData_bus0.sfm3505_o2_flow = -9.9;
-      }
-    } else if (!sensors_bus0->hasSFM3505()) {
-      // No SFM3505 detected - set to invalid indicator
+/** Read flow and pressure sensors on both I2C buses (fast control loop). */
+void readFastSensors(uint32_t now) {
+  // SFM3505 Flow Sensor - Bus 0
+  if (sensorsInitialized && sensors_bus0->hasSFM3505()) {
+    float sfm_air, sfm_o2;
+    if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
+      sensorData_bus0.sfm3505_air_flow = sfm_air;
+      sensorData_bus0.sfm3505_o2_flow = sfm_o2;
+    } else {
       sensorData_bus0.sfm3505_air_flow = -9.9;
       sensorData_bus0.sfm3505_o2_flow = -9.9;
     }
+  } else if (!sensors_bus0->hasSFM3505()) {
+    sensorData_bus0.sfm3505_air_flow = -9.9;
+    sensorData_bus0.sfm3505_o2_flow = -9.9;
+  }
 
-    // ========================================================================
-    // Read ABPD Low Pressure Sensor (now in fast control loop)
-    // ========================================================================
-    static uint32_t lastABPDTime = 0;
-    if (sensorsInitialized && sensors_bus0->hasABPD() && (currentTime - lastABPDTime) >= sysConfig.PressSamplTime) {
-      lastABPDTime = currentTime;
+  // ABPD Low Pressure Sensor - Bus 0
+  static uint32_t lastABPDTime = 0;
+  if (sensorsInitialized && sensors_bus0->hasABPD() && (now - lastABPDTime) >= sysConfig.PressSamplTime) {
+    lastABPDTime = now;
 
-      float abpd_pressure, abpd_temp;
-      uint8_t abpd_status;
-      if (sensors_bus0->readABPDPressureTemp(abpd_pressure, abpd_temp, abpd_status)) {
-        sensorData_bus0.abpd_pressure = abpd_pressure;
-        sensorData_bus0.abpd_temperature = abpd_temp;
-      } else {
-        sensorData_bus0.abpd_pressure = -9.9;
-        sensorData_bus0.abpd_temperature = -9.9;
-      }
-    } else if (!sensors_bus0->hasABPD()) {
-      // No ABPD detected - set to invalid indicator
+    float abpd_pressure, abpd_temp;
+    uint8_t abpd_status;
+    if (sensors_bus0->readABPDPressureTemp(abpd_pressure, abpd_temp, abpd_status)) {
+      sensorData_bus0.abpd_pressure = abpd_pressure;
+      sensorData_bus0.abpd_temperature = abpd_temp;
+    } else {
       sensorData_bus0.abpd_pressure = -9.9;
       sensorData_bus0.abpd_temperature = -9.9;
     }
+  } else if (!sensors_bus0->hasABPD()) {
+    sensorData_bus0.abpd_pressure = -9.9;
+    sensorData_bus0.abpd_temperature = -9.9;
+  }
 
-    // ========================================================================
-    // Read Bus 1 SFM3505 Flow Sensor
-    // ========================================================================
-    if (sensors_bus1_initialized && sensors_bus1->hasSFM3505()) {
-      float sfm_air, sfm_o2;
-      if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-        sensorData_bus1.sfm3505_air_flow = sfm_air;
-        sensorData_bus1.sfm3505_o2_flow = sfm_o2;
-      } else {
-        sensorData_bus1.sfm3505_air_flow = -9.9;
-        sensorData_bus1.sfm3505_o2_flow = -9.9;
-      }
-    } else if (!sensors_bus1_initialized || !sensors_bus1->hasSFM3505()) {
+  // SFM3505 Flow Sensor - Bus 1
+  if (sensors_bus1_initialized && sensors_bus1->hasSFM3505()) {
+    float sfm_air, sfm_o2;
+    if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
+      sensorData_bus1.sfm3505_air_flow = sfm_air;
+      sensorData_bus1.sfm3505_o2_flow = sfm_o2;
+    } else {
       sensorData_bus1.sfm3505_air_flow = -9.9;
       sensorData_bus1.sfm3505_o2_flow = -9.9;
     }
-
-    // ========================================================================
-    // Read Bus 1 ABP2 Pressure Sensor (Asynchronous)
-    // ========================================================================
-    static uint32_t lastBus1PressureTime = 0;
-    static bool bus1PressureCommandSent = false;
-
-    if (sensors_bus1_initialized && sensors_bus1->hasABP2() && (currentTime - lastBus1PressureTime) >= sysConfig.PressSamplTime) {
-      lastBus1PressureTime = currentTime;
-
-      if (!bus1PressureCommandSent) {
-        sensors_bus1->startABP2Measurement();
-        bus1PressureCommandSent = true;
-      } else {
-        float pressure;
-        uint8_t status;
-        if (sensors_bus1->readABP2Pressure(pressure, status)) {
-          sensorData_bus1.supply_pressure = pressure;
-        }
-        bus1PressureCommandSent = false;
-      }
-    } else if (!sensors_bus1_initialized || !sensors_bus1->hasABP2()) {
-      sensorData_bus1.supply_pressure = -9.9;
-    }
-
-    // ========================================================================
-    // Read FDO2 Optical Oxygen Sensor - ASYNC (non-blocking)
-    // Sample rate: FDO2_SAMPLE_TIME_US (default 500ms = 2Hz, set in main.hpp)
-    // State machine: START -> WAIT_RESPONSE -> PROCESS -> IDLE -> START...
-    // ========================================================================
-    static uint32_t lastFDO2StartTime = 0;
-    static bool fdo2MeasurementPending = false;
-
-    if (fdo2Initialized) {
-      // Check if response is ready (non-blocking)
-      if (fdo2MeasurementPending && fdo2Sensor.isResponseReady()) {
-        // Parse the result
-        if (fdo2Sensor.getAsyncResult(fdo2Data)) {
-          // Check for fatal errors
-          if (fdo2Sensor.hasFatalError(fdo2Data.status)) {
-            if (sysConfig.quiet_mode == 0) {
-              hostCom.printf("⚠️ FDO2 Fatal Error: %s\n",
-                             fdo2Sensor.getStatusString(fdo2Data.status).c_str());
-            }
-          }
-          // Optionally log warnings in verbose mode
-          else if (sysConfig.quiet_mode == 0 && fdo2Sensor.hasWarning(fdo2Data.status)) {
-            hostCom.printf("⚠️ FDO2 Warning: %s\n",
-                           fdo2Sensor.getStatusString(fdo2Data.status).c_str());
-          }
-        }
-        fdo2MeasurementPending = false;
-      }
-
-      // Start new measurement at FDO2_SAMPLE_TIME_US intervals (if not already pending)
-      if (!fdo2MeasurementPending && (currentTime - lastFDO2StartTime) >= FDO2_SAMPLE_TIME_US) {
-        lastFDO2StartTime = currentTime;
-        if (fdo2Sensor.startMeasurementAsync(true)) {  // true = include raw data
-          fdo2MeasurementPending = true;
-        }
-      }
-    }
-
-    // ========================================================================
-    // Ventilator HLC Update (if running)
-    // ========================================================================
-    if (ventilator.isRunning()) {
-      // Gather measurements for ventilator
-      VentilatorMeasurements ventMeas;
-      ventMeas.airwayPressure_mbar = sensorData_bus0.abpd_pressure;
-      ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow;
-      ventMeas.expFlow_slm = 0;  // TODO: Add expiratory flow sensor if available
-      ventMeas.deliveredO2_percent = fdo2Initialized ?
-        fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : 21.0f;
-
-      // Update ventilator state machine
-      ventilator.update(ventMeas, currentTime);
-
-      // Apply ventilator outputs to actuators (MUX channels 1-3)
-      VentilatorOutputs ventOut = ventilator.getOutputs();
-
-      // Channel 1: Air valve - flow setpoint
-      muxRouter.sendSetFlow(MUX_AIR_VALVE, ventOut.airValveFlow_slm);
-
-      // Channel 2: O2 valve - flow setpoint
-      muxRouter.sendSetFlow(MUX_O2_VALVE, ventOut.o2ValveFlow_slm);
-
-      // Channel 3: Exp valve - pressure or position control
-      if (ventOut.expValveClosed) {
-        muxRouter.sendCommand(MUX_EXP_VALVE, 'V', 0);  // Close valve
-      } else if (ventOut.expValveAsPressure) {
-        muxRouter.sendSetPressure(MUX_EXP_VALVE, ventOut.expValveSetpoint);
-      } else {
-        muxRouter.sendCommand(MUX_EXP_VALVE, 'V', ventOut.expValveSetpoint);
-      }
-    }
-
-    // ========================================================================
-    // Execute control for ALL MUX channels in parallel (when ventilator not running)
-    // Each channel runs its own signal generator independently
-    // ========================================================================
-    if (!ventilator.isRunning()) {
-      for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
-        // Note: For now, all channels share the same flow reference and sensor data
-        // In future, each channel could have independent references
-        actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
-      }
-    }
-
-    // ========================================================================
-    // Update WiFi buffer at high-speed control rate (for 50+ Hz web updates)
-    // ========================================================================
-
-
-    
-    // Log data from the selected MUX channel
-    wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
-                           sensorData_bus0.supply_pressure,
-                           actuator.getValveControlSignal(),
-                           muxRouter.getCurrent(sysConfig.mux_channel),
-                           sensorData_bus0.abpd_pressure,
-                           sensorData_bus0.abpd_temperature,
-                           sensorData_bus1.sfm3505_air_flow,
-                           sensorData_bus1.supply_pressure);
+  } else if (!sensors_bus1_initialized || !sensors_bus1->hasSFM3505()) {
+    sensorData_bus1.sfm3505_air_flow = -9.9;
+    sensorData_bus1.sfm3505_o2_flow = -9.9;
   }
 
-  // ============================================================================
-  // GUI/Serial output timing (T command - typically slower)
-  // ============================================================================
+  // ABP2 Pressure Sensor - Bus 1 (Asynchronous)
+  static uint32_t lastBus1PressureTime = 0;
+  static bool bus1PressureCommandSent = false;
 
-  if ((micros() - past_time) >= sysConfig.delta_t) {
-    past_time = micros();
+  if (sensors_bus1_initialized && sensors_bus1->hasABP2() && (now - lastBus1PressureTime) >= sysConfig.PressSamplTime) {
+    lastBus1PressureTime = now;
 
-    // Only output data if sensors were successfully initialized
-    // NOTE: Sensor reading now happens in fast control loop (control_interval)
-    // NOTE: ABP2 and ABPD pressure sensors are read asynchronously above
-    if (sensorsInitialized) {
-      // Output data based on quiet mode
-      outputData();
+    if (!bus1PressureCommandSent) {
+      sensors_bus1->startABP2Measurement();
+      bus1PressureCommandSent = true;
+    } else {
+      float pressure;
+      uint8_t status;
+      if (sensors_bus1->readABP2Pressure(pressure, status)) {
+        sensorData_bus1.supply_pressure = pressure;
+      }
+      bus1PressureCommandSent = false;
     }
+  } else if (!sensors_bus1_initialized || !sensors_bus1->hasABP2()) {
+    sensorData_bus1.supply_pressure = -9.9;
+  }
+}
 
-    // ========================================================================
-    // Update WiFi server with Bus 0 data (primary)
-    // ========================================================================
-    wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);  // Send SFM3505 Air flow to web
-    wifiServer.updatePressure(sensorData_bus0.supply_pressure);  // Uses async ABP2 reading
-    wifiServer.updateLowPressure(sensorData_bus0.abpd_pressure);  // Send ABPD low pressure to web
-    wifiServer.updateTemperature(sensorData_bus0.abpd_temperature);  // Send ABPD temperature to web
-    wifiServer.updateValveSignal(actuator.getValveControlSignal());
-    wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));  // Send current from selected MUX channel to web
+/** FDO2 Optical Oxygen Sensor - async non-blocking read. */
+void pollFDO2(uint32_t now) {
+  static uint32_t lastFDO2StartTime = 0;
+  static bool fdo2MeasurementPending = false;
 
-    // ========================================================================
-    // Update WiFi server with Bus 1 data
-    // ========================================================================
-    wifiServer.updateFlow2(sensorData_bus1.sfm3505_air_flow);  // Send Bus 1 SFM3505 Air flow to web
-    wifiServer.updatePressure2(sensorData_bus1.supply_pressure);  // Send Bus 1 ABP2 pressure to web
+  if (!fdo2Initialized) return;
 
-    // ========================================================================
-    // Update WiFi server with ventilator settings
-    // ========================================================================
-    VentilatorConfig cfg = ventilator.getConfig();
-    VentilatorStatus st = ventilator.getStatus();
-    wifiServer.updateVentilatorSettings(
-        ventilator.isRunning(),
-        ventilator.getStateString(),
-        cfg.respRate,
-        cfg.tidalVolume_mL,
-        cfg.ieRatio,
-        cfg.maxPressure_mbar,
-        cfg.peep_mbar,
-        cfg.maxInspFlow_slm,
-        cfg.targetFiO2,
-        st.breathCount,
-        st.peakPressure_mbar,
-        st.measuredVt_mL
-    );
+  if (fdo2MeasurementPending && fdo2Sensor.isResponseReady()) {
+    if (fdo2Sensor.getAsyncResult(fdo2Data)) {
+      if (fdo2Sensor.hasFatalError(fdo2Data.status)) {
+        if (sysConfig.quiet_mode == 0) {
+          hostCom.printf("⚠️ FDO2 Fatal Error: %s\n",
+                         fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+        }
+      } else if (sysConfig.quiet_mode == 0 && fdo2Sensor.hasWarning(fdo2Data.status)) {
+        hostCom.printf("⚠️ FDO2 Warning: %s\n",
+                       fdo2Sensor.getStatusString(fdo2Data.status).c_str());
+      }
+    }
+    fdo2MeasurementPending = false;
   }
 
-  // ============================================================================
-  // Handle Serial1 communication with external microcontroller (Asynchronous)
-  // ============================================================================
+  if (!fdo2MeasurementPending && (now - lastFDO2StartTime) >= FDO2_SAMPLE_TIME_US) {
+    lastFDO2StartTime = now;
+    if (fdo2Sensor.startMeasurementAsync(true)) {
+      fdo2MeasurementPending = true;
+    }
+  }
+}
 
-  // Update asynchronous serial reader - processes incoming data non-blocking
+/** Ventilator HLC update - gather measurements, run state machine, apply outputs. */
+void updateVentilatorControl(uint32_t now) {
+  if (!ventilator.isRunning()) return;
+
+  VentilatorMeasurements ventMeas;
+  ventMeas.airwayPressure_mbar = sensorData_bus0.abpd_pressure;
+  ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow;
+  ventMeas.expFlow_slm = 0;  // TODO: Add expiratory flow sensor if available
+  ventMeas.deliveredO2_percent = fdo2Initialized ?
+    fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : 21.0f;
+
+  ventilator.update(ventMeas, now);
+
+  VentilatorOutputs ventOut = ventilator.getOutputs();
+  muxRouter.sendSetFlow(MUX_AIR_VALVE, ventOut.airValveFlow_slm);
+  muxRouter.sendSetFlow(MUX_O2_VALVE, ventOut.o2ValveFlow_slm);
+
+  if (ventOut.expValveClosed) {
+    muxRouter.sendCommand(MUX_EXP_VALVE, 'V', 0);
+  } else if (ventOut.expValveAsPressure) {
+    muxRouter.sendSetPressure(MUX_EXP_VALVE, ventOut.expValveSetpoint);
+  } else {
+    muxRouter.sendCommand(MUX_EXP_VALVE, 'V', ventOut.expValveSetpoint);
+  }
+}
+
+/** Execute actuator control for all MUX channels (when ventilator not running). */
+void executeActuatorControl() {
+  if (ventilator.isRunning()) return;
+
+  for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
+    actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+  }
+}
+
+/** Buffer high-speed data for WiFi web dashboard. */
+void bufferWiFiData() {
+  wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
+                         sensorData_bus0.supply_pressure,
+                         actuator.getValveControlSignal(),
+                         muxRouter.getCurrent(sysConfig.mux_channel),
+                         sensorData_bus0.abpd_pressure,
+                         sensorData_bus0.abpd_temperature,
+                         sensorData_bus1.sfm3505_air_flow,
+                         sensorData_bus1.supply_pressure);
+}
+
+/** Serial/GUI output and WiFi server status push (slow loop). */
+void updateSerialOutput() {
+  if (sensorsInitialized) {
+    outputData();
+  }
+
+  // WiFi server: Bus 0 data
+  wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);
+  wifiServer.updatePressure(sensorData_bus0.supply_pressure);
+  wifiServer.updateLowPressure(sensorData_bus0.abpd_pressure);
+  wifiServer.updateTemperature(sensorData_bus0.abpd_temperature);
+  wifiServer.updateValveSignal(actuator.getValveControlSignal());
+  wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));
+
+  // WiFi server: Bus 1 data
+  wifiServer.updateFlow2(sensorData_bus1.sfm3505_air_flow);
+  wifiServer.updatePressure2(sensorData_bus1.supply_pressure);
+
+  // WiFi server: Ventilator settings
+  VentilatorConfig cfg = ventilator.getConfig();
+  VentilatorStatus st = ventilator.getStatus();
+  wifiServer.updateVentilatorSettings(
+      ventilator.isRunning(),
+      ventilator.getStateString(),
+      cfg.respRate,
+      cfg.tidalVolume_mL,
+      cfg.ieRatio,
+      cfg.maxPressure_mbar,
+      cfg.peep_mbar,
+      cfg.maxInspFlow_slm,
+      cfg.targetFiO2,
+      st.breathCount,
+      st.peakPressure_mbar,
+      st.measuredVt_mL
+  );
+}
+
+/** Process serial communication, commands, and MUX channel changes. */
+void processSerialCommands() {
   muxRouter.update();
 
-  // Serial2 - DISABLED FOR NOW
-  // if (Serial2.available()) {
-  //   String data = Serial2.readStringUntil('\n');
-  //   hostCom.printf("[Serial2 RX]: %s\n", data.c_str());
-  // }
-
-  // Serial1 actuator data output is now in outputData() function for quiet_mode == 3
-
-  // ============================================================================
-  // Command parser and UI updates
-  // ============================================================================
-
   parser.update();
-  // Try ventilator commands first (two-character commands)
   if (!parser.processVentilatorCommands(ventilator)) {
-    // If not a ventilator command, try regular commands
     parser.processCommands(sysConfig, actuator);
   }
 
-  // Handle MUX channel change - switch to different actuator instance
   static uint8_t lastMuxChannel = 0;
   if (sysConfig.mux_channel != lastMuxChannel) {
     ControllerMode mode = actuators[sysConfig.mux_channel].getControllerMode();
     hostCom.printf("Switched to MUX channel %d (mode: %d)\n", sysConfig.mux_channel, mode);
     lastMuxChannel = sysConfig.mux_channel;
   }
+}
 
-  // Handle user interface update
+/** Update TFT display fields and O2 reading at their own rates. */
+void updateDisplay() {
   static uint32_t UILoopStartTime = micros();
   if (micros() - UILoopStartTime > SET_UI_UPDATE_TIME) {
     UILoopStartTime = micros();
 
-    // Only update live data display when not showing ventilator settings
     if (!showVentilatorSettings) {
       ControllerMode presentMode = actuator.getControllerMode();
       String ctrlMode = "Valve Set";
       switch (presentMode) {
-        case PID_CONTROL:
-          ctrlMode = "PID";
-          break;
-        case VALVE_SET_VALUE_CONTROL:
-          ctrlMode = "Valve Set";
-          break;
-        case SINE_CONTROL:
-          ctrlMode = "Sine";
-          break;
-        case STEP_CONTROL:
-          ctrlMode = "Step";
-          break;
-        case TRIANGLE_CONTROL:
-          ctrlMode = "Triangle";
-          break;
-        case SWEEP_CONTROL:
-          ctrlMode = "Sweep";
-          break;
-        default:
-          ctrlMode = "Unknown";
-          break;
+        case PID_CONTROL:          ctrlMode = "PID"; break;
+        case VALVE_SET_VALUE_CONTROL: ctrlMode = "Valve Set"; break;
+        case SINE_CONTROL:         ctrlMode = "Sine"; break;
+        case STEP_CONTROL:         ctrlMode = "Step"; break;
+        case TRIANGLE_CONTROL:     ctrlMode = "Triangle"; break;
+        case SWEEP_CONTROL:        ctrlMode = "Sweep"; break;
+        default:                   ctrlMode = "Unknown"; break;
       }
 
-      // Include MUX channel in mode display
       String modeWithChannel = ctrlMode + " M" + String(sysConfig.mux_channel);
       renderer.drawControllerMode(modeWithChannel);
       wifiServer.updateMode(modeWithChannel);
 
-      // Display Bus 0 data (primary) - now showing SFM3505 Air flow and ABPD data
-      renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air Bus 0
-      renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");  // SFM3505 Air Bus 1
-      // Show Bus 0 supply pressure (ABP2) in bar, low pressure (ABPD), and temperature
+      renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");
+      renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");
       String pressureStr = "P0: " + String(sensorData_bus0.supply_pressure / 100.0, 2) + " LP: " +
                            String(sensorData_bus0.abpd_pressure, 1) + " " +
                            String(sensorData_bus0.abpd_temperature, 1) + " C";
       renderer.drawPressure(pressureStr);
-      // Show Bus 1 supply pressure (ABP2)
       renderer.drawPressure2(String(sensorData_bus1.supply_pressure / 100.0, 2) + " bar");
       renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
-      // Show current from selected MUX channel
       renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
-
-      // Update WiFi client connection indicator
       renderer.drawWiFiStatusDot(wifiServer.hasClients());
     }
   }
 
-  // ============================================================================
-  // O2 sensor display update (slower rate - 0.5 second interval)
-  // ============================================================================
+  // O2 sensor display (slower rate)
   static uint32_t O2DisplayLoopStartTime = micros();
   if (micros() - O2DisplayLoopStartTime > FDO2_SAMPLE_TIME_US) {
     O2DisplayLoopStartTime = micros();
 
-    // Update O2 display only when not showing ventilator settings
     if (!showVentilatorSettings) {
       if (fdo2Initialized) {
         renderer.drawO2(String(fdo2Data.oxygenPartialPressure_hPa, 1) + " hPa");
@@ -868,11 +770,10 @@ void loop() {
       }
     }
   }
+}
 
-  // ============================================================================
-  // WiFi control button handling
-  // ============================================================================
-  
+/** Handle WiFi toggle and ventilator settings display button presses. */
+void handleButtons() {
   if (interactionKey1.wasReleased()) {
     if (interactionKey1.wasLongPress()) {
       hostCom.println("Key1 long press (>1s) - Enabling WiFi");
@@ -888,20 +789,14 @@ void loop() {
     }
   }
 
-  // ============================================================================
-  // Boot button handling - Ventilator settings display
-  // ============================================================================
   if (interactionKey2.wasReleased()) {
     if (interactionKey2.wasLongPress()) {
-      // Long press: Show ventilator settings
       hostCom.println("Key2 long press - Showing ventilator settings");
       showVentilatorSettings = true;
 
-      // Get ventilator config and status
       VentilatorConfig cfg = ventilator.getConfig();
       VentilatorStatus st = ventilator.getStatus();
 
-      // Format the settings strings
       String line1 = String("Vent: ") + (ventilator.isRunning() ? "ON" : "OFF") +
                      "  " + ventilator.getStateString();
       String line2 = "RR=" + String(cfg.respRate, 1) + " VT=" + String(cfg.tidalVolume_mL, 0) +
@@ -918,12 +813,10 @@ void loop() {
 
       renderer.showVentilatorSettings(line1.c_str(), line2.c_str(), line3.c_str(), line4.c_str());
     } else {
-      // Short press: Return to live data
       if (showVentilatorSettings) {
         hostCom.println("Key2 short press - Returning to live data");
         showVentilatorSettings = false;
 
-        // Redraw the normal UI
         renderer.clear();
         renderer.drawLabel();
         renderer.drawStatusField();
@@ -939,7 +832,48 @@ void loop() {
       }
     }
   }
+}
 
-  // Handle web requests
+void loop() {
+  static bool firstRun = true;
+  if (firstRun) {
+    initDisplay();
+    firstRun = false;
+  }
+
+  uint32_t now = micros();
+
+  // ABP2 pressure sensors (async, every loop)
+  pollPressureSensors(now);
+
+  // Fast control loop (control_interval, default 10ms = 100Hz)
+  if ((now - control_past_time) >= sysConfig.control_interval) {
+    control_past_time = now;
+
+    readFastSensors(now);
+
+    pollFDO2(now);
+
+    updateVentilatorControl(now);
+    executeActuatorControl();
+    bufferWiFiData();
+  }
+
+  // Serial/GUI output and WiFi status push (delta_t, default 100ms = 10Hz)
+  if ((now - past_time) >= sysConfig.delta_t) {
+    past_time = now;
+    updateSerialOutput();
+  }
+
+  // Serial communication and command processing
+  processSerialCommands();
+
+  // Display updates (UI + O2 at their own rates)
+  updateDisplay();
+
+  // Button input handling (WiFi toggle + ventilator settings)
+  handleButtons();
+
+  // WiFi client request handling
   wifiServer.handleClient();
 }

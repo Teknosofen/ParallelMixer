@@ -166,10 +166,10 @@ void ImageRenderer::drawWiFiField() {
 }
 
 void ImageRenderer::drawWiFiStatusDot(bool connected) {
-    int dotX = wiFiLabelPos.x + 40;  // right after "WiFi" text
+    int dotX = wiFiLabelPos.x + 50;  // right after "WiFi" text
     int dotY = wiFiLabelPos.y + 7;   // vertically centered with label
     uint16_t color = connected ? TFT_GREEN : TFT_LOGOBACKGROUND;
-    tft.fillCircle(dotX, dotY, 3, color);
+    tft.fillCircle(dotX, dotY, 4, color);
 }
 
 void ImageRenderer::drawStatusField() {

@@ -29,7 +29,6 @@ void SerialMuxRouter::update() {
   // Process all available characters
   while (_serial->available()) {
     char c = _serial->read();
-
     if (c == '\n') {
       // End of message - process it
       if (_receiveBuffer.length() >= 2) {

@@ -1,5 +1,5 @@
-#pragma once
-
+#ifndef MAIN_HPP
+#define MAIN_HPP
 
 // Colours for Parallelmixer
 #define TFT_LOGOBACKGROUND       0x85BA // note, if you pick another color from the image, note that you will have to flip the bytes here
@@ -37,3 +37,5 @@
 // line 55 #define ST7789_DRIVER      // Full configuration option, define additional parameters below for this display
 // line 87 #define TFT_WIDTH  170 // ST7789 170 x 320
 // line 92 #define TFT_HEIGHT 320 // ST7789 240 x 320
+
+#endif // MAIN_HPP
