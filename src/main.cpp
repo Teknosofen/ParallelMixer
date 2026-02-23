@@ -318,7 +318,6 @@ void setup() {
       hostCom.println();
       deviceCount++;
     }
-    delay(5);
   }
 
   if (deviceCount == 0) {
@@ -366,7 +365,6 @@ void setup() {
       hostCom.println();
       bus1DeviceCount++;
     }
-    delay(5);
   }
 
   if (bus1DeviceCount == 0) {
