@@ -11,8 +11,8 @@
 #define TFT_REDDISH_TINT         0xA4B2   
 #define TFT_GREENISH_TINT        0x5DAD
 
-#define parallelVerLbl "ParallelMixer 2026-02-03 0.9.2"
-#define VERSION "0.9.2"
+#define parallelVerLbl "ParallelMixer 2026-02-26 0.9.4"
+#define VERSION "0.9.4"
 
 // Pin definitions
 #define Flow_Input_Analogue_pin 1

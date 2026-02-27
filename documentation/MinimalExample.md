@@ -116,7 +116,7 @@ The SensorReader class provides methods to check which sensors are present:
 ```cpp
 bool hasSFM3505() const;  // Check if SFM3505 flow sensor detected
 bool hasABP2() const;     // Check if ABP2 pressure sensor detected
-bool hasABPD() const;     // Check if ABPD low pressure sensor detected
+bool hasELVH() const;     // Check if ELVH low pressure sensor detected
 ```
 
 ### Default Values
@@ -124,7 +124,6 @@ bool hasABPD() const;     // Check if ABPD low pressure sensor detected
 All sensor readings default to **-9.9** when:
 - Sensor not detected during initialization
 - Sensor read fails
-- Sensor disabled by compile switch
 
 This makes it easy to identify invalid data:
 ```cpp
@@ -133,18 +132,9 @@ if (flow == -9.9) {
 }
 ```
 
-### Pressure Sensor Compile Switch
+### Pressure Sensors
 
-Due to I2C address conflict (both ABP2 and ABPD use 0x28), you must select one sensor at compile time until an I2C multiplexer is added.
-
-In **SensorReader.hpp** (lines 12-13):
-```cpp
-// Uncomment ONE of the following:
-#define USE_ABP2_PRESSURE_SENSOR    // High pressure (default)
-// #define USE_ABPD_PRESSURE_SENSOR    // Low pressure
-```
-
-See [PRESSURE_SENSOR_CONFIG.md](../PRESSURE_SENSOR_CONFIG.md) for complete details.
+ABP2 (0x28) and ELVH (0x48) have different I2C addresses and are both detected automatically at runtime. No compile-time selection is needed.
 
 ## 🔧 How It Works
 

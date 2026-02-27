@@ -40,7 +40,7 @@ TFT_eSPI tft = TFT_eSPI();
 ImageRenderer renderer(tft);
 
 // Two sensor readers on separate I2C buses - use pointers to avoid initialization issues
-SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505, ABP2, ABPD
+SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505, ABP2, ELVH
 SensorReader* sensors_bus1;   // GPIO10/11 - includes SFM3505, ABP2
 
 // Array of actuator controls - one per MUX channel for parallel operation
@@ -81,15 +81,25 @@ bool sensors_bus1_initialized = false; // Bus 1 sensors
 uint32_t past_time;          // For GUI/serial output timing
 uint32_t control_past_time;  // For control system execution timing
 
+// ELVH helpers — single sensor may be on either bus
+inline float getELVH_Pressure() {
+  return (sensors_bus0 && sensors_bus0->hasELVH()) ? sensorData_bus0.elvh_pressure : sensorData_bus1.elvh_pressure;
+}
+inline float getELVH_Temperature() {
+  return (sensors_bus0 && sensors_bus0->hasELVH()) ? sensorData_bus0.elvh_temperature : sensorData_bus1.elvh_temperature;
+}
+
 void outputData() {
-  // Output data from Bus 0 (primary sensors)
+  float elvh_p = getELVH_Pressure();
+  float elvh_t = getELVH_Temperature();
+
   switch (sysConfig.quiet_mode) {
     case 0:  // Verbose: Supply Pressure, Low Pressure, Temp, Air flow (Bus0 & Bus1), Valve signal
-      hostCom.printf("P: %.2f\tLP: %.2f\tT: %.1f\tAir0: %.3f\tAir1: %.3f\tP1: %.2f\tValve: %.2f\n",
-                     sensorData_bus0.supply_pressure,
-                     sensorData_bus0.abpd_pressure,
-                     sensorData_bus0.abpd_temperature,
+      hostCom.printf("Paw: %.2f\tT: %.1f\tFlow0: %.3f\tP0: %.2f\tFlow1: %.3f\tP1: %.2f\tValve: %.2f\n",
+                     elvh_p,
+                     elvh_t,
                      sensorData_bus0.sfm3505_air_flow,
+                     sensorData_bus0.supply_pressure,
                      sensorData_bus1.sfm3505_air_flow,
                      sensorData_bus1.supply_pressure,
                      actuator.getValveControlSignal());
@@ -183,8 +193,8 @@ void outputData() {
           fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
         hostCom.printf("SP0:%.2f LP:%.2f T:%.1f Air0:%.3f Air1:%.3f SP1:%.2f V:%.2f I:%.3f O2:%.2fhPa %.2f%%\n",
                        sensorData_bus0.supply_pressure,
-                       sensorData_bus0.abpd_pressure,
-                       sensorData_bus0.abpd_temperature,
+                       elvh_p,
+                       elvh_t,
                        sensorData_bus0.sfm3505_air_flow,
                        sensorData_bus1.sfm3505_air_flow,
                        sensorData_bus1.supply_pressure,
@@ -206,8 +216,8 @@ void outputData() {
         hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.3f\t%.2f\t%.2f\t%.3f\t%.2f\t%.2f\n",
                        millis(),
                        sensorData_bus0.supply_pressure,
-                       sensorData_bus0.abpd_pressure,
-                       sensorData_bus0.abpd_temperature,
+                       elvh_p,
+                       elvh_t,
                        sensorData_bus0.sfm3505_air_flow,
                        sensorData_bus1.sfm3505_air_flow,
                        sensorData_bus1.supply_pressure,
@@ -310,9 +320,7 @@ void setup() {
       else if (address == 0x28) hostCom.print(" - ABP2 (pressure)");
       else if (address == 0x60) hostCom.print(" - MCP4725 (DAC)");
       else if (address == 0x76) hostCom.print(" - BME280");
-
-      // ABPDLNN100MG2A3 has address 0x18
-      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)"); // wrong address, unfortunately it also whas 0x28
+      else if (address == 0x48) hostCom.print(" - ELVH-M100D (low pressure)");
       else hostCom.print(" - unknown device");
       
       hostCom.println();
@@ -358,7 +366,7 @@ void setup() {
       // Identify known devices
       if (address == 0x2E) hostCom.print(" - SFM3505 (flow)");
       else if (address == 0x28) hostCom.print(" - ABP2 (pressure)");
-      else if (address == 0x18) hostCom.print(" - ABPDLNN100MG2A3 (pressure)");
+      else if (address == 0x48) hostCom.print(" - ELVH-M100D (low pressure)");
       else if (address == 0x60) hostCom.print(" - MCP4725 (DAC)");
       else hostCom.print(" - unknown device");
 
@@ -490,8 +498,9 @@ void initDisplay() {
   renderer.drawWiFiPromt("Long press: enable");
 }
 
-/** ABP2 Pressure Sensor on Bus 0 - Asynchronous two-phase read. */
+/** ABP2 Pressure Sensors on Bus 0 & Bus 1 - Asynchronous two-phase read. */
 void pollPressureSensors(uint32_t now) {
+  // --- Bus 0 ABP2 ---
   static uint32_t lastPressureTime = 0;
   static bool pressureCommandSent = false;
 
@@ -512,60 +521,8 @@ void pollPressureSensors(uint32_t now) {
   } else if (!sensors_bus0->hasABP2()) {
     sensorData_bus0.supply_pressure = -9.9;
   }
-}
 
-/** Read flow and pressure sensors on both I2C buses (fast control loop). */
-void readFastSensors(uint32_t now) {
-  // SFM3505 Flow Sensor - Bus 0
-  if (sensorsInitialized && sensors_bus0->hasSFM3505()) {
-    float sfm_air, sfm_o2;
-    if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      sensorData_bus0.sfm3505_air_flow = sfm_air;
-      sensorData_bus0.sfm3505_o2_flow = sfm_o2;
-    } else {
-      sensorData_bus0.sfm3505_air_flow = -9.9;
-      sensorData_bus0.sfm3505_o2_flow = -9.9;
-    }
-  } else if (!sensors_bus0->hasSFM3505()) {
-    sensorData_bus0.sfm3505_air_flow = -9.9;
-    sensorData_bus0.sfm3505_o2_flow = -9.9;
-  }
-
-  // ABPD Low Pressure Sensor - Bus 0
-  static uint32_t lastABPDTime = 0;
-  if (sensorsInitialized && sensors_bus0->hasABPD() && (now - lastABPDTime) >= sysConfig.PressSamplTime) {
-    lastABPDTime = now;
-
-    float abpd_pressure, abpd_temp;
-    uint8_t abpd_status;
-    if (sensors_bus0->readABPDPressureTemp(abpd_pressure, abpd_temp, abpd_status)) {
-      sensorData_bus0.abpd_pressure = abpd_pressure;
-      sensorData_bus0.abpd_temperature = abpd_temp;
-    } else {
-      sensorData_bus0.abpd_pressure = -9.9;
-      sensorData_bus0.abpd_temperature = -9.9;
-    }
-  } else if (!sensors_bus0->hasABPD()) {
-    sensorData_bus0.abpd_pressure = -9.9;
-    sensorData_bus0.abpd_temperature = -9.9;
-  }
-
-  // SFM3505 Flow Sensor - Bus 1
-  if (sensors_bus1_initialized && sensors_bus1->hasSFM3505()) {
-    float sfm_air, sfm_o2;
-    if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      sensorData_bus1.sfm3505_air_flow = sfm_air;
-      sensorData_bus1.sfm3505_o2_flow = sfm_o2;
-    } else {
-      sensorData_bus1.sfm3505_air_flow = -9.9;
-      sensorData_bus1.sfm3505_o2_flow = -9.9;
-    }
-  } else if (!sensors_bus1_initialized || !sensors_bus1->hasSFM3505()) {
-    sensorData_bus1.sfm3505_air_flow = -9.9;
-    sensorData_bus1.sfm3505_o2_flow = -9.9;
-  }
-
-  // ABP2 Pressure Sensor - Bus 1 (Asynchronous)
+  // --- Bus 1 ABP2 (same async pattern) ---
   static uint32_t lastBus1PressureTime = 0;
   static bool bus1PressureCommandSent = false;
 
@@ -585,6 +542,77 @@ void readFastSensors(uint32_t now) {
     }
   } else if (!sensors_bus1_initialized || !sensors_bus1->hasABP2()) {
     sensorData_bus1.supply_pressure = -9.9;
+  }
+}
+
+/** Read flow and low-pressure sensors on both I2C buses (fast control loop). */
+void readFastSensors(uint32_t now) {
+  // SFM3505 Flow Sensor - Bus 0
+  if (sensorsInitialized && sensors_bus0->hasSFM3505()) {
+    float sfm_air, sfm_o2;
+    if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
+      sensorData_bus0.sfm3505_air_flow = sfm_air;
+      sensorData_bus0.sfm3505_o2_flow = sfm_o2;
+    } else {
+      sensorData_bus0.sfm3505_air_flow = -9.9;
+      sensorData_bus0.sfm3505_o2_flow = -9.9;
+    }
+  } else if (!sensors_bus0->hasSFM3505()) {
+    sensorData_bus0.sfm3505_air_flow = -9.9;
+    sensorData_bus0.sfm3505_o2_flow = -9.9;
+  }
+
+  // ELVH Low Pressure Sensor - Bus 0 (direct read, no command phase)
+  static uint32_t lastELVHTime = 0;
+  if (sensorsInitialized && sensors_bus0->hasELVH() && (now - lastELVHTime) >= sysConfig.PressSamplTime) {
+    lastELVHTime = now;
+
+    float elvh_pressure, elvh_temp;
+    uint8_t elvh_status;
+    if (sensors_bus0->readELVHPressureTemp(elvh_pressure, elvh_temp, elvh_status)) {
+      sensorData_bus0.elvh_pressure = elvh_pressure;
+      sensorData_bus0.elvh_temperature = elvh_temp;
+    } else {
+      sensorData_bus0.elvh_pressure = -9.9;
+      sensorData_bus0.elvh_temperature = -9.9;
+    }
+  } else if (!sensors_bus0->hasELVH()) {
+    sensorData_bus0.elvh_pressure = -9.9;
+    sensorData_bus0.elvh_temperature = -9.9;
+  }
+
+  // SFM3505 Flow Sensor - Bus 1
+  if (sensors_bus1_initialized && sensors_bus1->hasSFM3505()) {
+    float sfm_air, sfm_o2;
+    if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
+      sensorData_bus1.sfm3505_air_flow = sfm_air;
+      sensorData_bus1.sfm3505_o2_flow = sfm_o2;
+    } else {
+      sensorData_bus1.sfm3505_air_flow = -9.9;
+      sensorData_bus1.sfm3505_o2_flow = -9.9;
+    }
+  } else if (!sensors_bus1_initialized || !sensors_bus1->hasSFM3505()) {
+    sensorData_bus1.sfm3505_air_flow = -9.9;
+    sensorData_bus1.sfm3505_o2_flow = -9.9;
+  }
+
+  // ELVH Low Pressure Sensor - Bus 1 (direct read, no command phase)
+  static uint32_t lastELVHTime_bus1 = 0;
+  if (sensors_bus1_initialized && sensors_bus1->hasELVH() && (now - lastELVHTime_bus1) >= sysConfig.PressSamplTime) {
+    lastELVHTime_bus1 = now;
+
+    float elvh_pressure, elvh_temp;
+    uint8_t elvh_status;
+    if (sensors_bus1->readELVHPressureTemp(elvh_pressure, elvh_temp, elvh_status)) {
+      sensorData_bus1.elvh_pressure = elvh_pressure;
+      sensorData_bus1.elvh_temperature = elvh_temp;
+    } else {
+      sensorData_bus1.elvh_pressure = -9.9;
+      sensorData_bus1.elvh_temperature = -9.9;
+    }
+  } else if (!sensors_bus1_initialized || !sensors_bus1->hasELVH()) {
+    sensorData_bus1.elvh_pressure = -9.9;
+    sensorData_bus1.elvh_temperature = -9.9;
   }
 }
 
@@ -623,7 +651,7 @@ void updateVentilatorControl(uint32_t now) {
   if (!ventilator.isRunning()) return;
 
   VentilatorMeasurements ventMeas;
-  ventMeas.airwayPressure_mbar = sensorData_bus0.abpd_pressure;
+  ventMeas.airwayPressure_mbar = getELVH_Pressure();
   ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow;
   ventMeas.expFlow_slm = 0;  // TODO: Add expiratory flow sensor if available
   ventMeas.deliveredO2_percent = fdo2Initialized ?
@@ -659,8 +687,8 @@ void bufferWiFiData() {
                          sensorData_bus0.supply_pressure,
                          actuator.getValveControlSignal(),
                          muxRouter.getCurrent(sysConfig.mux_channel),
-                         sensorData_bus0.abpd_pressure,
-                         sensorData_bus0.abpd_temperature,
+                         getELVH_Pressure(),
+                         getELVH_Temperature(),
                          sensorData_bus1.sfm3505_air_flow,
                          sensorData_bus1.supply_pressure);
 }
@@ -674,8 +702,8 @@ void updateSerialOutput() {
   // WiFi server: Bus 0 data
   wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);
   wifiServer.updatePressure(sensorData_bus0.supply_pressure);
-  wifiServer.updateLowPressure(sensorData_bus0.abpd_pressure);
-  wifiServer.updateTemperature(sensorData_bus0.abpd_temperature);
+  wifiServer.updateLowPressure(getELVH_Pressure());
+  wifiServer.updateTemperature(getELVH_Temperature());
   wifiServer.updateValveSignal(actuator.getValveControlSignal());
   wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));
 
@@ -745,8 +773,8 @@ void updateDisplay() {
       renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");
       renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");
       String pressureStr = "P0: " + String(sensorData_bus0.supply_pressure / 100.0, 2) + " LP: " +
-                           String(sensorData_bus0.abpd_pressure, 1) + " " +
-                           String(sensorData_bus0.abpd_temperature, 1) + " C";
+                           String(getELVH_Pressure(), 1) + " " +
+                           String(getELVH_Temperature(), 1) + " C";
       renderer.drawPressure(pressureStr);
       renderer.drawPressure2(String(sensorData_bus1.supply_pressure / 100.0, 2) + " bar");
       renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));

@@ -24,7 +24,7 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │  │    GPIO43 (SDA) ──┬── 4.7kΩ to 3.3V                                 │   │
 │  │                   ├── SFM3505 Flow Sensor (0x2E)                    │   │
 │  │                   ├── ABP2 Supply Pressure (0x28)                   │   │
-│  │                   ├── ABPD Low Pressure (0x18)                      │   │
+│  │                   ├── ELVH Low Pressure (0x48)                      │   │
 │  │                   └── MCP4725 DAC (0x60)                            │   │
 │  │    GPIO44 (SCL) ──┴── 4.7kΩ to 3.3V                                 │   │
 │  │    Clock: 1MHz (actual ~660-800kHz due to ESP32 limits)             │   │
@@ -78,7 +78,7 @@ This document outlines the design for a ventilator/respirator function in the Pa
 |-------------|-----------|---------|---------------------------|-------------|
 | SFM3505     | I2C Bus 0 | 0x2E    | Air/O2 Flow (slm)         | 100 Hz      |
 | ABP2        | I2C Bus 0 | 0x28    | Supply Pressure (bar)     | 10-100 Hz   |
-| ABPD        | I2C Bus 0 | 0x18    | Airway Pressure (mbar)    | 10-100 Hz   |
+| ELVH        | I2C Bus 0 | 0x48    | Airway Pressure (mbar)    | 10-100 Hz   |
 | SFM3505 #2  | I2C Bus 1 | 0x2E    | Air/O2 Flow (slm)         | 100 Hz      |
 | ABP2 #2     | I2C Bus 1 | 0x28    | Supply Pressure (bar)     | 10-100 Hz   |
 | FDO2        | Serial2   | -       | O2 partial pressure (hPa) | 2 Hz        |
@@ -141,7 +141,7 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │ +initialize()     │   │ +drawStatusField()│   │ +handleClient()       │
 │ +readSFM3505...() │   │ +drawFlow()       │   │ +updateFlow()         │
 │ +readABP2...()    │   │ +drawPressure()   │   │ +addDataPoint()       │
-│ +readABPD...()    │   │ +drawWiFiAPIP()   │   │ +generateHtmlPage()   │
+│ +readELVH...()    │   │ +drawWiFiAPIP()   │   │ +generateHtmlPage()   │
 └───────────────────┘   └───────────────────┘   └───────────────────────┘
 
 ┌───────────────────┐
@@ -201,7 +201,7 @@ This document outlines the design for a ventilator/respirator function in the Pa
  └──────────────┘                              │                 │
                                                │   Ventilator    │         ┌──────────────┐
  ┌──────────────┐                              │   Controller    │── F ───►│  Air Valve   │
- │     ABPD     │─── Airway Pressure ─────────►│     (HLC)       │         │   (MUX 1)    │
+ │     ELVH     │─── Airway Pressure ─────────►│     (HLC)       │         │   (MUX 1)    │
  │   Pressure   │    (mbar)                    │                 │         └──────────────┘
  └──────────────┘                              │                 │
                                                │  State Machine  │         ┌──────────────┐
@@ -244,7 +244,7 @@ This document outlines the design for a ventilator/respirator function in the Pa
 │                                                                             │
 │  CONTROL LOOP (control_interval = 10ms = 100Hz)                             │
 │  ├── Read SFM3505 Flow Sensors                                              │
-│  ├── Read ABPD Pressure Sensor                                              │
+│  ├── Read ELVH Pressure Sensor                                              │
 │  ├── Update FDO2 (async state machine, 2Hz actual)                          │
 │  ├── VentilatorController.update() ─► State machine + outputs               │
 │  ├── Apply outputs to MUX channels (if ventilator running)                  │
@@ -999,7 +999,7 @@ struct VentilatorStatus {
 if (ventilator.isRunning()) {
     // Gather measurements
     VentilatorMeasurements meas;
-    meas.airwayPressure_mbar = sensorData_bus0.abpd_pressure;
+    meas.airwayPressure_mbar = sensorData_bus0.elvh_pressure;
     meas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow;
     meas.deliveredO2_percent = fdo2Data.oxygenPartialPressure_hPa; // Convert as needed
 

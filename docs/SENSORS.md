@@ -10,7 +10,7 @@ This document covers integration details, data formats, and usage patterns for a
 
 1. [SFM3505 Flow Sensor](#sfm3505-flow-sensor)
 2. [ABP2 High Pressure Sensor (Async)](#abp2-high-pressure-sensor)
-3. [ABPD Low Pressure Sensor](#abpd-low-pressure-sensor)
+3. [ELVH Low Pressure Sensor](#elvh-low-pressure-sensor)
 4. [FDO2 Optical Oxygen Sensor](#fdo2-optical-oxygen-sensor)
 5. [Default Values & Error Handling](#default-values--error-handling)
 
@@ -201,15 +201,14 @@ if (!pressureCommandSent) {
 
 ---
 
-## ABPD Low Pressure Sensor
+## ELVH Low Pressure Sensor
 
-**Model**: ABPDLNN100MG2A3 (Honeywell)  
-**I2C Address**: 0x28 (⚠️ conflicts with ABP2)  
+**Model**: ELVH-M100D...4A4  
+**I2C Address**: 0x48  
 **Type**: Differential / low pressure  
-**Range**: 0-100 mbar (0-10 kPa)  
+**Range**: 0-100 mbar  
 **Resolution**: 14-bit pressure + 11-bit temperature  
-**Compile-time enable**: `#define USE_ABPD_PRESSURE_SENSOR`  
-**Detection**: `hasABPD()`
+**Detection**: `hasELVH()`
 
 ### Data Format (4 Bytes)
 
@@ -225,7 +224,6 @@ if (!pressureCommandSent) {
 ```cpp
 // 14-bit pressure
 float pressure_mbar = (counts - 1638) * 100.0 / 13107.0;
-float pressure_kPa = pressure_mbar * 0.1;
 
 // 11-bit temperature
 float temperature_C = (counts / 2047.0) * 200.0 - 50.0;
@@ -236,11 +234,11 @@ float temperature_C = (counts / 2047.0) * 200.0 - 50.0;
 Direct (synchronous) read — no command phase required:
 
 ```cpp
-float pressure_kpa, temperature_c;
+float pressure_mbar, temperature_c;
 uint8_t status;
-if (sensors_bus0->readABPDPressureTemp(pressure_kpa, temperature_c, status)) {
-    sensorData_bus0.abpd_pressure = pressure_kpa;
-    sensorData_bus0.abpd_temperature = temperature_c;
+if (sensors_bus0->readELVHPressureTemp(pressure_mbar, temperature_c, status)) {
+    sensorData_bus0.elvh_pressure = pressure_mbar;
+    sensorData_bus0.elvh_temperature = temperature_c;
 }
 ```
 
@@ -380,6 +378,6 @@ All sensor readings use **-9.9** as the invalid/unavailable indicator:
 | Read timeout | -9.9 |
 | Sensor disabled by compile switch | -9.9 |
 
-**Affected fields**: `supply_pressure`, `sfm3505_air_flow`, `sfm3505_o2_flow`, `abpd_pressure`, `abpd_temperature`
+**Affected fields**: `supply_pressure`, `sfm3505_air_flow`, `sfm3505_o2_flow`, `elvh_pressure`, `elvh_temperature`
 
 This makes it immediately obvious which data is valid vs. invalid across serial output, web interface, and LCD display.

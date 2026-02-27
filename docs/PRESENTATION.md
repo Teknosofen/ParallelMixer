@@ -107,7 +107,7 @@ Engineering management who are engineers but not experts in ventilator/respirato
 ├─────────────────────────────────────────────────────────────┤
 │  SFM3505 (0x2E)  │  Flow measurement      │  100 Hz        │
 │  ABP2 (0x28)     │  Supply pressure       │  10-100 Hz     │
-│  ABPD (0x18)     │  Airway pressure       │  10-100 Hz     │
+│  ELVH (0x48)     │  Airway pressure       │  10-100 Hz     │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -388,7 +388,7 @@ Response:
 | Component | Status |
 |-----------|--------|
 | Hardware platform | ✅ Complete |
-| Sensor integration (SFM3505, ABP2, ABPD, FDO2) | ✅ Complete |
+| Sensor integration (SFM3505, ABP2, ELVH, FDO2) | ✅ Complete |
 | Serial MUX router | ✅ Complete |
 | Actuator control modes (PID, Sine, Step, Sweep) | ✅ Complete |
 | TFT display | ✅ Complete |

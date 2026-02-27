@@ -126,5 +126,5 @@ Feasibility study for 2 kHz control loop operation:
 - **Available**: 500 µs (2 kHz) → **47% margin**
 - **Bottleneck**: I2C sensor reads (94.5% of cycle time)
 - **Optimization**: Higher I2C clock (660 kHz actual) reduces SFM3505 read to ~157 µs
-- ABPD and ABP2 reads are rate-limited and have negligible average impact
+- ELVH and ABP2 reads are rate-limited and have negligible average impact
 - GUI/serial output loop is separate and non-interfering

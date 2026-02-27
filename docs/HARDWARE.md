@@ -49,7 +49,7 @@ This document consolidates all hardware wiring, circuit design, and configuratio
 |---------|--------|-------------|
 | 0x2E | SFM3505 | Air + O2 flow (slm) |
 | 0x28 | ABP2 | Supply pressure (kPa) |
-| 0x28 | ABPD | Low pressure (mbar) + temp — **conflicts with ABP2** |
+| 0x48 | ELVH-M100D | Low pressure (mbar) + temp |
 | 0x60 | MCP4725 | DAC output (legacy) |
 
 #### Bus 1 (Wire1) — GPIO10/11
@@ -74,30 +74,19 @@ This document consolidates all hardware wiring, circuit design, and configuratio
 
 ## Pressure Sensor Configuration
 
-### I2C Address Conflict
+### I2C Addresses
 
-Both pressure sensors use the same I2C address (0x28):
+The two pressure sensors use different I2C addresses and can coexist on the same bus:
 
-- **ABP2DSNT150PG2A3XX** (High pressure) — 0-150 PSI (0-10.3 bar)
-- **ABPDLNN100MG2A3** (Low pressure) — 0-100 mbar (0-1.45 PSI)
+- **ABP2DSNT150PG2A3XX** (High pressure, 0x28) — 0-150 PSI (0-10.3 bar)
+- **ELVH-M100D** (Low pressure, 0x48) — 0-100 mbar
 
-Until an I2C multiplexer is added, only **one** sensor can be used at a time per bus.
+Both sensors are detected automatically at runtime — no compile-time selection needed.
 
-### Compile-Time Switch
-
-In `include/SensorReader.hpp` (lines 12-13), uncomment exactly ONE:
-
-```cpp
-#define USE_ABP2_PRESSURE_SENSOR    // High pressure (default)
-// #define USE_ABPD_PRESSURE_SENSOR    // Low pressure
-```
-
-| Option | Define | Data Fields | Read Method |
-|--------|--------|-------------|-------------|
-| ABP2 (default) | `USE_ABP2_PRESSURE_SENSOR` | `supply_pressure` (kPa) | Async (command → wait → read) |
-| ABPD | `USE_ABPD_PRESSURE_SENSOR` | `abpd_pressure` (kPa), `abpd_temperature` (°C) | Direct read |
-
-**Important:** You must recompile and upload after changing the switch.
+| Sensor | Address | Data Fields | Read Method |
+|--------|---------|-------------|-------------|
+| ABP2 | 0x28 | `supply_pressure` (kPa) | Async (command → wait → read) |
+| ELVH | 0x48 | `elvh_pressure` (mbar), `elvh_temperature` (°C) | Direct read |
 
 ### Future: Dual Sensor with I2C Multiplexer
 

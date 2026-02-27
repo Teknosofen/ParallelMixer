@@ -1,7 +1,7 @@
 #include "SensorReader.hpp"
 
 SensorReader::SensorReader(TwoWire* wire, const char* name, uint32_t clockFreq)
-  : _wire(wire), _name(name), _clockFreq(clockFreq), _hasSFM3505(false), _hasABP2(false), _hasABPD(false) {
+  : _wire(wire), _name(name), _clockFreq(clockFreq), _hasSFM3505(false), _hasABP2(false), _hasELVH(false) {
   // Detection flags will be set during initialize()
 }
 
@@ -16,7 +16,7 @@ bool SensorReader::initialize() {
   // Reset detection flags
   _hasSFM3505 = false;
   _hasABP2 = false;
-  _hasABPD = false;
+  _hasELVH = false;
 
   // ============================================================================
   // Detect SFM3505 flow sensor
@@ -42,10 +42,9 @@ bool SensorReader::initialize() {
   }
 
   // ============================================================================
-  // Detect Pressure Sensor (compile-time selection due to address conflict)
+  // Detect Pressure Sensors (ABP2 at 0x28, ELVH at 0x48 - no conflict)
   // ============================================================================
-#ifdef USE_ABP2_PRESSURE_SENSOR
-  // Using ABP2 high pressure sensor
+  // ABP2 high pressure sensor
   Serial.printf("[%s] Checking for ABP2 at address 0x%02X...\n", _name, I2Cadr_ABP2);
   _wire->beginTransmission(I2Cadr_ABP2);
   byte abp2_error = _wire->endTransmission();
@@ -56,30 +55,34 @@ bool SensorReader::initialize() {
   } else {
     Serial.printf("[%s] ⚠️ ABP2 not detected at 0x%02X\n", _name);
   }
-  _hasABPD = false;  // ABPD disabled by compile switch
 
-#elif defined(USE_ABPD_PRESSURE_SENSOR)
-  // Using ABPD low pressure sensor
-  Serial.printf("[%s] Checking for ABPD at address 0x%02X...\n", _name, I2Cadr_ABPD);
-  _wire->beginTransmission(I2Cadr_ABPD);
-  byte abpd_error = _wire->endTransmission();
+  // ELVH low pressure sensor
+  Serial.printf("[%s] Checking for ELVH at address 0x%02X...\n", _name, I2Cadr_ELVH);
+  _wire->beginTransmission(I2Cadr_ELVH);
+  byte elvh_error = _wire->endTransmission();
 
-  if (abpd_error == 0) {
-    Serial.printf("[%s] ✅ ABPD detected\n", _name);
-    _hasABPD = true;
+  if (elvh_error == 0) {
+    Serial.printf("[%s] ✅ ELVH detected\n", _name);
+    _hasELVH = true;
+
+    // Per DS_0376: the detection scan (START+addr+STOP without clock data)
+    // corrupts the ELVH I2C state. Do a dummy read to clear the error,
+    // then a second read to get valid data (datasheet says "a second Start
+    // condition must be set, which clears the error").
+    _wire->requestFrom(I2Cadr_ELVH, (uint8_t)4);  // Recovery read (may return garbage)
+    while (_wire->available()) _wire->read();       // Flush
+    delay(5);
+    _wire->requestFrom(I2Cadr_ELVH, (uint8_t)4);  // Second read to confirm clean state
+    while (_wire->available()) _wire->read();       // Flush
+    Serial.printf("[%s] ELVH I2C state recovered after detection scan\n", _name);
   } else {
-    Serial.printf("[%s] ⚠️ ABPD not detected at 0x%02X\n", _name);
+    Serial.printf("[%s] ⚠️ ELVH not detected at 0x%02X\n", _name);
   }
-  _hasABP2 = false;  // ABP2 disabled by compile switch
-
-#else
-  #error "Please define either USE_ABP2_PRESSURE_SENSOR or USE_ABPD_PRESSURE_SENSOR in SensorReader.hpp"
-#endif
 
   // ============================================================================
   // Summary
   // ============================================================================
-  int detectedCount = (_hasSFM3505 ? 1 : 0) + (_hasABP2 ? 1 : 0) + (_hasABPD ? 1 : 0);
+  int detectedCount = (_hasSFM3505 ? 1 : 0) + (_hasABP2 ? 1 : 0) + (_hasELVH ? 1 : 0);
   Serial.printf("[%s] Sensor detection complete: %d/3 sensors found\n", _name, detectedCount);
 
   // Return true if at least one sensor was detected
@@ -422,19 +425,23 @@ bool SensorReader::readABP2Pressure(float& pressure_kpa, uint8_t& status_byte) {
 }
 
 // ============================================================================
-// ABPDLNN100MG2A3 Low Pressure Sensor Methods
+// ELVH-M100D Low Pressure Sensor Methods
 // ============================================================================
-// Honeywell ABPDLNN100MG2A3 - 0-100 mbar differential/low pressure sensor
+// ELVH-M100D...4A4 - 0-100 mbar differential/low pressure sensor at 0x48
 // 14-bit digital output with temperature
-// Based on SSC protocol (similar to ABP2 but different output format)
+//
+// IMPORTANT (per DS_0376 datasheet):
+//   The ELVH continuously measures. Just send START + address(READ) + read 4 bytes + STOP.
+//   Do NOT send START+address(WRITE)+STOP without data — this creates a communication
+//   error that requires an extra START to recover from.
 
-bool SensorReader::readABPDPressureTemp(float& pressure_kpa, float& temperature_c, uint8_t& status_byte) {
-  // Request 4 bytes from ABPD sensor
-  uint8_t bytesRead = _wire->requestFrom(I2Cadr_ABPD, (uint8_t)4);
+bool SensorReader::readELVHPressureTemp(float& pressure_mbar, float& temperature_c, uint8_t& status_byte) {
+  // Direct read: START + slave address (read) + 4 data bytes + STOP
+  uint8_t bytesRead = _wire->requestFrom(I2Cadr_ELVH, (uint8_t)4);
 
   if (bytesRead != 4) {
-    Serial.printf("[%s] ❌ ABPD error: Expected 4 bytes, got %d\n", _name, bytesRead);
-    pressure_kpa = 0.0;
+    Serial.printf("[%s] ❌ ELVH error: Expected 4 bytes, got %d\n", _name, bytesRead);
+    pressure_mbar = 0.0;
     temperature_c = 0.0;
     return false;
   }
@@ -449,32 +456,30 @@ bool SensorReader::readABPDPressureTemp(float& pressure_kpa, float& temperature_
   status_byte = msb >> 6;
 
   // Extract 14-bit pressure value
-  // Pressure is in bits [13:0] across bytes 0-1
-  // Mask out the 2 status bits from MSB, then combine with LSB
   uint16_t pressure_counts = ((msb & 0x3F) << 8) | lsb;
 
   // Extract 11-bit temperature value
-  // Temperature is in bits [10:0] across bytes 2-3
-  // Byte 2 has bits [10:3], Byte 3 has bits [2:0] in upper 3 bits
   uint16_t temp_counts = (temp_msb << 3) | (temp_lsb >> 5);
 
-  // Convert pressure counts to pressure using transfer function
-  // P = (counts - Output_min) * (Pmax - Pmin) / (Output_max - Output_min) + Pmin
-  // For 100 mbar range (0-100 mbar):
-  //   Output_min = 10% of 2^14 = 1638 counts
-  //   Output_max = 90% of 2^14 = 14745 counts
-  //   Pmin = 0 mbar, Pmax = 100 mbar
-  //   Span = 14745 - 1638 = 13107 counts
+  // Convert pressure counts to mbar using transfer function
+  // For ELVHM1DHRRDCN4A4: differential ±100 mbar range (-100 to +100 mbar)
+  //   Output_min = 10% of 2^14 = 1638 counts  → -100 mbar
+  //   Output_mid = 50% of 2^14 = 8192 counts  →    0 mbar
+  //   Output_max = 90% of 2^14 = 14745 counts → +100 mbar
+  //   Span = 14745 - 1638 = 13107 counts over 200 mbar range
+  pressure_mbar = ((float)pressure_counts - 1638.0) * 200.0 / 13107.0 - 100.0;
 
-  float pressure_mbar = ((float)pressure_counts - 1638.0) * 100.0 / 13107.0;
-
-  // Convert mbar to kPa (1 mbar = 0.1 kPa)
-  pressure_kpa = pressure_mbar * 0.1;
-
-  // Convert temperature counts to temperature in °C
+  // Convert temperature counts to °C
   // T = (counts / 2047) * 200 - 50
-  // Range: -50°C to +150°C over 11 bits (0-2047)
   temperature_c = ((float)temp_counts / 2047.0) * 200.0 - 50.0;
+
+  // Debug: print first few reads to serial
+  static uint8_t elvh_debug_count = 0;
+  if (elvh_debug_count < 10) {
+    Serial.printf("[%s] ELVH raw: S=%d P_counts=%u T_counts=%u -> %.2f mbar, %.1f C\n",
+                  _name, status_byte, pressure_counts, temp_counts, pressure_mbar, temperature_c);
+    elvh_debug_count++;
+  }
 
   return true;
 }

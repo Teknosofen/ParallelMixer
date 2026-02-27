@@ -79,8 +79,8 @@ wifiServer.addDataPoint(
   pressure,       // ABP2 pressure
   valveSignal,    // Valve control signal
   current,        // Actuator current
-  lowPressure,    // ABPD low pressure
-  temperature     // ABPD temperature
+  lowPressure,    // ELVH low pressure
+  temperature     // ELVH temperature
 );
 
 // Handle web requests (must call in loop!)

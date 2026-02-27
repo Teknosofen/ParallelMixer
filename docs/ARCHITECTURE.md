@@ -61,8 +61,8 @@ P-Mixer is an embedded ventilator control system providing:
 - **Clock**: 400 kHz (configurable, defined as I2C0_CLOCK_FREQ)
 - **Sensors**:
   - SFM3505 flow sensor (0x2E) - Air + O2 channels
-  - ABP2 high pressure sensor (0x28) *OR*
-  - ABPD low pressure sensor (0x18 or 0x28)
+  - ABP2 high pressure sensor (0x28)
+  - ELVH-M100D low pressure sensor (0x48)
   - MCP4725 DAC (0x60) - optional
 
 #### I2C Bus 1 (Wire1)
@@ -71,7 +71,7 @@ P-Mixer is an embedded ventilator control system providing:
 - **Purpose**: Parallel sensor measurement (Bus 0 + Bus 1 = dual-channel capability)
 - **Sensors**: Same device types as Bus 0
 
-**Note**: Both ABP2 and ABPD use address 0x28. Only ONE can be active per bus without an I2C multiplexer. Use compile-time switches to select which pressure sensor is enabled.
+**Note**: ABP2 (0x28) and ELVH (0x48) have different addresses and can both be active on the same bus simultaneously. No compile-time switch needed.
 
 #### Serial Buses
 
@@ -107,7 +107,7 @@ Main Loop (~200 Hz)
 │
 ├── Fast Control Loop (X command, default 100 Hz / 10ms)
 │   ├── Read SFM3505 flow sensors (Bus 0 & 1)
-│   ├── Read ABPD low pressure + temperature (Bus 0 & 1)
+│   ├── Read ELVH low pressure + temperature (Bus 0 & 1)
 │   ├── Read ABP2 pressure async (Bus 0 & 1)
 │   ├── FDO2 async check (500ms sample period = 2 Hz)
 │   ├── Ventilator state machine update (if running)
@@ -146,7 +146,7 @@ Main Loop (~200 Hz)
 **Architecture**:
 - Two instances: `sensors_bus0` (Wire) and `sensors_bus1` (Wire1)
 - Each instance independently detects and manages its sensors
-- Detection flags: `_hasSFM3505`, `_hasABP2`, `_hasABPD`
+- Detection flags: `_hasSFM3505`, `_hasABP2`, `_hasELVH`
 - All reads check detection flags before accessing hardware
 
 ### Supported Sensors
@@ -234,18 +234,18 @@ if ((micros() - lastPressureTime) >= 100000) {
 **Compile-Time Enable**: `#define USE_ABP2_PRESSURE_SENSOR`  
 **Detection**: `hasABP2()`
 
-#### 3. ABPDLNN100MG2A3 Low Pressure Sensor (Honeywell)
+#### 3. ELVH-M100D Low Pressure Sensor
 
 **Specifications**:
-- **I2C Address**: 0x18 or 0x28 (⚠️ conflicts with ABP2)
+- **I2C Address**: 0x48 (no conflict with ABP2)
 - **Type**: Differential/Low pressure
-- **Range**: 0-100 mbar (0-10 kPa)
+- **Range**: 0-100 mbar
 - **Resolution**: 14-bit pressure + 11-bit temperature
 - **Update Rate**: Continuous (read on demand)
 
 **Data Format**:
 ```
-4 bytes per read:
+4 bytes per read (HSC/SSC compatible):
 [0] Status(2) + Pressure[13:8]
 [1] Pressure[7:0]
 [2] Temperature[10:3]
@@ -256,16 +256,14 @@ if ((micros() - lastPressureTime) >= 100000) {
 ```cpp
 // 14-bit pressure
 Pressure_mbar = (counts - 1638) × 100.0 / 13107.0
-Pressure_kPa = Pressure_mbar × 0.1
 
 // 11-bit temperature
 Temperature_C = (counts / 2047.0) × 200.0 - 50.0
 ```
 
-**Compile-Time Enable**: `#define USE_ABPD_PRESSURE_SENSOR`  
-**Detection**: `hasABPD()`
+**Detection**: `hasELVH()`
 
-**⚠️ Important**: Only ONE pressure sensor type (ABP2 or ABPD) can be enabled per bus due to address conflict. Use `#define` to select which is active.
+Both ABP2 and ELVH are detected automatically at runtime — no compile-time switch needed.
 
 #### 4. FDO2 Optical Oxygen Sensor (PreSens)
 
@@ -328,8 +326,8 @@ This provides immediate visual feedback in all outputs (serial, web, display).
 sensorData.supply_pressure = -9.9;        // ABP2
 sensorData.sfm3505_air_flow = -9.9;       // SFM3505 air
 sensorData.sfm3505_o2_flow = -9.9;        // SFM3505 O2
-sensorData.abpd_pressure = -9.9;          // ABPD
-sensorData.abpd_temperature = -9.9;       // ABPD
+sensorData.elvh_pressure = -9.9;          // ELVH
+sensorData.elvh_temperature = -9.9;       // ELVH
 ```
 
 ---
@@ -973,8 +971,8 @@ struct SensorData {
     float supply_pressure;         // ABP2 high pressure (kPa)
     float sfm3505_air_flow;        // SFM3505 air channel (slm)
     float sfm3505_o2_flow;         // SFM3505 O2 channel (slm)
-    float abpd_pressure;           // ABPD low pressure (kPa)
-    float abpd_temperature;        // ABPD temperature (°C)
+    float elvh_pressure;           // ELVH low pressure (mbar)
+    float elvh_temperature;        // ELVH temperature (°C)
 };
 
 // Invalid/unavailable indicator: -9.9 for all fields
@@ -1070,7 +1068,7 @@ struct VentilatorConfig {
 ### VentilatorMeasurements
 ```cpp
 struct VentilatorMeasurements {
-    float airwayPressure_mbar;      // From ABPD sensor
+    float airwayPressure_mbar;      // From ELVH sensor
     float inspFlow_slm;             // From SFM3505 (Bus 0)
     float expFlow_slm;              // Reserved (sensor not connected)
     float deliveredO2_percent;      // From FDO2 sensor
@@ -1137,8 +1135,8 @@ T<microseconds>  - Output loop interval (default 100000 = 10 Hz)
 ```
 ├─ SFM3505 read (Bus 0):           2ms
 ├─ SFM3505 read (Bus 1):           2ms
-├─ ABPD read (Bus 0):              1ms
-├─ ABPD read (Bus 1):              1ms
+├─ ELVH read (Bus 0):              1ms
+├─ ELVH read (Bus 1):              1ms
 ├─ PID + actuator control:         1ms
 ├─ Serial MUX update:              1ms
 └─ Web buffer update:              <1ms
@@ -1179,9 +1177,7 @@ Margin:                             2ms (20%)
 
 **In `SensorReader.hpp`**:
 ```cpp
-// Pressure sensor selection (only ONE can be enabled per bus)
-#define USE_ABP2_PRESSURE_SENSOR    // High pressure (0-150 PSI)
-//#define USE_ABPD_PRESSURE_SENSOR  // Low pressure (0-100 mbar)
+// Both ABP2 (0x28) and ELVH (0x48) are detected automatically - no selection needed
 
 // CRC validation
 #define SFM3505_ENABLE_CRC_CHECK 0  // 0=disabled, 1=enabled
@@ -1407,17 +1403,13 @@ expValve.setPressure(max_pressure);  // Releases if exceeded
 When an I2C mux is added:
 ```cpp
 // In SensorReader::initialize()
-selectI2CChannel(0);  // ABP2 on channel 0
-_hasABP2 = detectABP2();
+selectI2CChannel(0);  // Sensor group A
+selectI2CChannel(1);  // Sensor group B
 
-selectI2CChannel(1);  // ABPD on channel 1
-_hasABPD = detectABPD();
-
-// Both sensors can now coexist!
+// Supports >2 identical sensors (up to 8 per mux)
 ```
 
 Benefits:
-- Use both ABP2 and ABPD simultaneously
 - Support >2 identical sensors (up to 8 per mux)
 - Isolate problematic sensors (prevent bus lockup)
 
@@ -1535,16 +1527,11 @@ Considerations:
 1. Check 7-byte read (should be exactly 7)
 2. Examine status byte (see bit definitions in sensor section)
 3. Verify async timing (command → wait 5ms → read)
-4. Check I2C address (0x28) not conflicting with ABPD
+4. Check I2C address (0x28) — ELVH uses 0x48, no conflict
 
 **Solutions**:
 - Ensure sensor has stable power supply
 - Wait ≥5ms between command and read
-- If using ABPD, disable ABP2:
-   ```cpp
-   //#define USE_ABP2_PRESSURE_SENSOR
-   #define USE_ABPD_PRESSURE_SENSOR
-   ```
 - Check for I2C bus errors (address NACK, data NACK)
 
 ### FDO2 Oxygen Sensor Issues
