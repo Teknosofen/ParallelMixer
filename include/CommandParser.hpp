@@ -46,6 +46,11 @@ public:
   void begin(unsigned long baud_rate);
   void update();
   bool isCommandReady() const;
+
+  // Access to pending command (for external command handlers)
+  const String& getCommandString() const { return _command_str; }
+  bool isCommandComplete() const { return _command_complete; }
+  void clearCommand() { _command_str = ""; _command_complete = false; }
   
   // Main command processing - pass in system objects
   void processCommands(SystemConfig& config, ActuatorControl& actuator);

@@ -16,6 +16,7 @@
 #include "SerialMuxRouter.hpp"
 #include "FDO2_Sensor.h"
 #include "VentilatorController.hpp"
+#include "LocalValveController.hpp"
 
 // ---------------------------------
 // logo BMP file as well as factory default config files arcan be stored in SPIFFS
@@ -55,6 +56,7 @@ ActuatorControl actuators[NUM_MUX_CHANNELS];
 CommandParser parser;
 SerialMuxRouter muxRouter(&Serial1);
 VentilatorController ventilator;
+LocalValveController localValveCtrl;
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
 Button interactionKey2(BOOT_BUTTON_PIN);  // Boot button for settings display
@@ -474,6 +476,13 @@ void setup() {
   wifiServer.setVentilatorController(&ventilator);
   hostCom.println("Ventilator HLC initialized (use VS for status, VO1 to start)");
 
+  // Initialize local valve controller (LLC)
+  // Sits between HLC outputs and MUX serial commands
+  localValveCtrl.begin(&muxRouter, LocalValveControllerConfig{});
+  localValveCtrl.setDefaults();
+  localValveCtrl.setEnabled(false);  // Start disabled (pass-through to downstream controllers)
+  hostCom.println("Local valve controller initialized (disabled, use LE1 to enable)");
+
   past_time = micros();
   control_past_time = micros();
 
@@ -646,7 +655,7 @@ void pollFDO2(uint32_t now) {
   }
 }
 
-/** Ventilator HLC update - gather measurements, run state machine, apply outputs. */
+/** Ventilator HLC update - gather measurements, run state machine, apply outputs via LLC. */
 void updateVentilatorControl(uint32_t now) {
   if (!ventilator.isRunning()) return;
 
@@ -660,16 +669,28 @@ void updateVentilatorControl(uint32_t now) {
   ventilator.update(ventMeas, now);
 
   VentilatorOutputs ventOut = ventilator.getOutputs();
-  muxRouter.sendSetFlow(MUX_AIR_VALVE, ventOut.airValveFlow_slm);
-  muxRouter.sendSetFlow(MUX_O2_VALVE, ventOut.o2ValveFlow_slm);
+  VentilatorConfig  ventCfg = ventilator.getConfig();
 
-  if (ventOut.expValveClosed) {
-    muxRouter.sendCommand(MUX_EXP_VALVE, 'V', 0);
-  } else if (ventOut.expValveAsPressure) {
-    muxRouter.sendSetPressure(MUX_EXP_VALVE, ventOut.expValveSetpoint);
-  } else {
-    muxRouter.sendCommand(MUX_EXP_VALVE, 'V', ventOut.expValveSetpoint);
-  }
+  // Build LLC setpoints from HLC outputs
+  LocalValveControllerSetpoints llcSP;
+  llcSP.airFlow_slm = ventOut.airValveFlow_slm;
+  llcSP.o2Flow_slm = ventOut.o2ValveFlow_slm;
+  llcSP.maxPressure_mbar = ventCfg.maxPressure_mbar;
+  llcSP.expPressure_mbar = ventOut.expValveSetpoint;
+  llcSP.expValveClosed = ventOut.expValveClosed;
+  llcSP.expValveActive = ventOut.expValveAsPressure;
+
+  // Build LLC measurements from sensor data
+  LocalValveControllerMeasurements llcMeas;
+  llcMeas.airFlow_slm = sensorData_bus0.sfm3505_air_flow;
+  llcMeas.o2Flow_slm = sensorData_bus1.sfm3505_air_flow;
+  llcMeas.airSupplyPressure_mbar = sensorData_bus0.supply_pressure;
+  llcMeas.o2SupplyPressure_mbar = sensorData_bus1.supply_pressure;
+  llcMeas.airwayPressure_mbar = getELVH_Pressure();
+
+  // LLC handles valve current computation OR pass-through
+  float dt = 0.01f;  // 100 Hz control loop = 10 ms
+  localValveCtrl.update(llcSP, llcMeas, dt);
 }
 
 /** Execute actuator control for all MUX channels (when ventilator not running). */
@@ -735,6 +756,51 @@ void processSerialCommands() {
   muxRouter.update();
 
   parser.update();
+
+  // Check for LLC commands before ventilator/general commands
+  // LE0/LE1 — Local valve controller enable
+  // LS — LLC status
+  if (parser.isCommandComplete()) {
+    String cmd = parser.getCommandString();
+    cmd.trim();
+    String upper = cmd.substring(0, 2);
+    upper.toUpperCase();
+
+    if (upper == "LE") {
+      String val = cmd.substring(2);
+      val.trim();
+      if (val.length() > 0) {
+        bool en = (val.toInt() != 0);
+        localValveCtrl.setEnabled(en);
+        if (en) localValveCtrl.reset();
+        Serial.printf("LLC %s\n", en ? "ENABLED (local valve control)" : "DISABLED (pass-through)");
+      } else {
+        Serial.printf("LE=%d\n", localValveCtrl.isEnabled() ? 1 : 0);
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "LS") {
+      Serial.printf("LLC: %s\n", localValveCtrl.isEnabled() ? "ENABLED" : "DISABLED");
+      if (localValveCtrl.isEnabled()) {
+        InspValveStatus air = localValveCtrl.getAirValveStatus();
+        InspValveStatus o2  = localValveCtrl.getO2ValveStatus();
+        ExpValveStatus  exp = localValveCtrl.getExpValveStatus();
+        Serial.printf("  Air: I=%.3fA FF=%.3f FlowPI=%.3f PressPI=%.3f %s\n",
+                      air.outputCurrent_A, air.feedforwardCurrent_A,
+                      air.flowPIOutput_A, air.pressurePIOutput_A,
+                      air.pressureLimiting ? "PLIM" : "FLOW");
+        Serial.printf("  O2:  I=%.3fA FF=%.3f FlowPI=%.3f PressPI=%.3f %s\n",
+                      o2.outputCurrent_A, o2.feedforwardCurrent_A,
+                      o2.flowPIOutput_A, o2.pressurePIOutput_A,
+                      o2.pressureLimiting ? "PLIM" : "FLOW");
+        Serial.printf("  Exp: I=%.3fA FF=%.3f PressPI=%.3f\n",
+                      exp.outputCurrent_A, exp.feedforwardCurrent_A,
+                      exp.pressurePIOutput_A);
+      }
+      parser.clearCommand();
+    }
+  }
+
   if (!parser.processVentilatorCommands(ventilator)) {
     parser.processCommands(sysConfig, actuator);
   }
