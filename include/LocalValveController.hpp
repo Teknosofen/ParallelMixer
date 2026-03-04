@@ -41,6 +41,48 @@ private:
 
 
 // ============================================================================
+// Pressure-Banded Flow Table (2D)
+// ============================================================================
+// Holds 2-4 PiecewiseLinearTables, each mapping V% → Flow at a specific
+// reference supply pressure.  Interpolates (and extrapolates) between bands
+// for a given live supply pressure.
+//
+// Use case: valve opening depends on supply pressure, so a single curve
+// is insufficient.  Multiple sweeps at different supply pressures give
+// a 2D flow surface Q = f(V%, Psupply).
+
+class PressureBandedTable {
+public:
+    static const uint8_t MAX_BANDS = 4;
+
+    PressureBandedTable();
+
+    /// Load one pressure band.  Bands must be loaded in ascending pressure order.
+    /// points: V% → Flow table for this reference pressure.
+    void loadBand(uint8_t bandIndex, float refPressure,
+                  const LookupPoint* points, uint8_t count);
+
+    /// Forward lookup: given V% and current supply pressure, return expected flow.
+    float lookup(float valvePercent, float supplyPressure) const;
+
+    /// Inverse lookup: given desired flow and current supply pressure, return V%.
+    /// Interpolates between pressure bands.  Extrapolates outside the range.
+    float inverseLookup(float desiredFlow, float supplyPressure) const;
+
+    uint8_t getBandCount() const { return _bandCount; }
+
+private:
+    PiecewiseLinearTable _flowTables[MAX_BANDS];   // V% → Flow
+    float _refPressure[MAX_BANDS];                  // Reference supply pressure per band
+    uint8_t _bandCount;
+
+    /// Find bracketing bands and interpolation weight t ∈ [0,1]
+    /// Extrapolates: t<0 if below lowest, t>1 if above highest
+    void findBrackets(float pressure, uint8_t& lo, uint8_t& hi, float& t) const;
+};
+
+
+// ============================================================================
 // PI Controller with Anti-Windup Tracking
 // ============================================================================
 // For override control: the inactive controller's integrator is "tracked"
@@ -137,9 +179,16 @@ public:
     void begin(const InspValveConfig& config);
     void reset();
 
-    /// Set the Cv linearization table: Cv(current) at a reference delta-P
-    /// Points: x = current (A), y = Cv (flow coefficient, slm/sqrt(mbar))
+    /// Set the Cv linearization table (DEPRECATED — use setFlowSurface).
     void setCvTable(const LookupPoint* points, uint8_t count);
+
+    /// Set a pressure-banded flow surface for feedforward.
+    /// bandIndex 0..3, loaded in ascending pressure order.
+    void setFlowBand(uint8_t bandIndex, float refPressure,
+                     const LookupPoint* points, uint8_t count);
+
+    /// Get the flow surface (for status/debug)
+    const PressureBandedTable& getFlowSurface() const { return _flowSurface; }
 
     /// Main update.  dt in seconds.
     /// Returns valve current command (A).
@@ -156,9 +205,11 @@ private:
     InspValveStatus   _status;
     PIController      _flowPI;
     PIController      _pressurePI;
-    PiecewiseLinearTable _cvTable;   // Cv(I) for feedforward
+    PiecewiseLinearTable _cvTable;        // Cv(I) for feedforward (legacy)
+    PressureBandedTable   _flowSurface;   // V%(Flow, Psupply) for 2D feedforward
 
-    /// Compute feedforward current from desired flow and supply pressure
+    /// Compute feedforward V% from desired flow and supply pressure.
+    /// Uses pressure-banded flow surface if loaded, falls back to Cv table.
     float computeFeedforward(float desiredFlow_slm, float supplyPressure_mbar,
                              float downstreamPressure_mbar) const;
 };

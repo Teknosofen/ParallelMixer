@@ -17,6 +17,7 @@
 #include "FDO2_Sensor.h"
 #include "VentilatorController.hpp"
 #include "LocalValveController.hpp"
+#include "ValveCharacterizer.hpp"
 
 // ---------------------------------
 // logo BMP file as well as factory default config files arcan be stored in SPIFFS
@@ -57,6 +58,7 @@ CommandParser parser;
 SerialMuxRouter muxRouter(&Serial1);
 VentilatorController ventilator;
 LocalValveController localValveCtrl;
+ValveCharacterizer valveChar;
 
 Button interactionKey1(INTERACTION_BUTTON_PIN);
 Button interactionKey2(BOOT_BUTTON_PIN);  // Boot button for settings display
@@ -483,6 +485,10 @@ void setup() {
   localValveCtrl.setEnabled(false);  // Start disabled (pass-through to downstream controllers)
   hostCom.println("Local valve controller initialized (disabled, use LE1 to enable)");
 
+  // Initialize valve characterizer
+  valveChar.begin(&muxRouter);
+  hostCom.println("Valve characterizer ready (CC<ch> to start, CX to abort)");
+
   past_time = micros();
   control_past_time = micros();
 
@@ -799,6 +805,56 @@ void processSerialCommands() {
       }
       parser.clearCommand();
     }
+    else if (upper == "CC") {
+      // Valve characterization: CC<channel>[,maxV[,stepV[,settleMs]]]
+      String params = cmd.substring(2);
+      params.trim();
+      if (params.length() > 0) {
+        CharacterizationConfig charCfg;
+        charCfg.maxVoltage = 12.0f;
+        charCfg.stepVoltage = 0.1f;
+        charCfg.settleTime_ms = 200;
+        charCfg.samplesPerStep = 10;
+
+        int comma1 = params.indexOf(',');
+        if (comma1 < 0) {
+          charCfg.muxChannel = params.toInt();
+        } else {
+          charCfg.muxChannel = params.substring(0, comma1).toInt();
+          String rest = params.substring(comma1 + 1);
+          int comma2 = rest.indexOf(',');
+          if (comma2 < 0) {
+            charCfg.maxVoltage = rest.toFloat();
+          } else {
+            charCfg.maxVoltage = rest.substring(0, comma2).toFloat();
+            rest = rest.substring(comma2 + 1);
+            int comma3 = rest.indexOf(',');
+            if (comma3 < 0) {
+              charCfg.stepVoltage = rest.toFloat();
+            } else {
+              charCfg.stepVoltage = rest.substring(0, comma3).toFloat();
+              charCfg.settleTime_ms = rest.substring(comma3 + 1).toInt();
+            }
+          }
+        }
+        const char* chName = (charCfg.muxChannel == 1) ? "Air" : 
+                             (charCfg.muxChannel == 2) ? "O2" : "??";
+        Serial.printf("[CC] Channel=%d (%s), maxV=%.1f%%, stepV=%.2f%%, settle=%lums, samples=%d\n",
+                      charCfg.muxChannel, chName,
+                      charCfg.maxVoltage, charCfg.stepVoltage,
+                      charCfg.settleTime_ms, charCfg.samplesPerStep);
+        valveChar.start(charCfg);
+      } else {
+        Serial.println("Usage: CC<ch>[,maxV[,stepV[,settleMs]]]");
+        Serial.println("  ch: 1=air, 2=O2");
+        Serial.println("  Example: CC1,12,0.1,200");
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "CX") {
+      valveChar.abort();
+      parser.clearCommand();
+    }
   }
 
   if (!parser.processVentilatorCommands(ventilator)) {
@@ -943,6 +999,9 @@ void loop() {
     control_past_time = now;
 
     readFastSensors(now);
+
+    // Valve characterizer update (non-blocking state machine)
+    valveChar.update(sensorData_bus0, sensorData_bus1, getELVH_Pressure());
 
     pollFDO2(now);
 

@@ -68,6 +68,94 @@ float PiecewiseLinearTable::inverseLookup(float y) const {
 
 
 // ============================================================================
+// PressureBandedTable — 2D flow surface with pressure interpolation
+// ============================================================================
+
+PressureBandedTable::PressureBandedTable() : _bandCount(0) {
+    memset(_refPressure, 0, sizeof(_refPressure));
+}
+
+void PressureBandedTable::loadBand(uint8_t bandIndex, float refPressure,
+                                    const LookupPoint* points, uint8_t count) {
+    if (bandIndex >= MAX_BANDS) return;
+    _flowTables[bandIndex].load(points, count);
+    _refPressure[bandIndex] = refPressure;
+    if (bandIndex >= _bandCount) _bandCount = bandIndex + 1;
+}
+
+void PressureBandedTable::findBrackets(float pressure,
+                                        uint8_t& lo, uint8_t& hi, float& t) const {
+    if (_bandCount <= 1) {
+        lo = hi = 0;
+        t = 0.0f;
+        return;
+    }
+
+    // Below lowest band → extrapolate using bands 0 and 1
+    if (pressure <= _refPressure[0]) {
+        lo = 0;
+        hi = 1;
+        float dp = _refPressure[1] - _refPressure[0];
+        t = (dp > 1e-3f) ? (pressure - _refPressure[0]) / dp : 0.0f;
+        return;
+    }
+
+    // Above highest band → extrapolate using last two bands
+    if (pressure >= _refPressure[_bandCount - 1]) {
+        lo = _bandCount - 2;
+        hi = _bandCount - 1;
+        float dp = _refPressure[hi] - _refPressure[lo];
+        t = (dp > 1e-3f) ? (pressure - _refPressure[lo]) / dp : 1.0f;
+        return;
+    }
+
+    // Find bracketing bands
+    for (uint8_t i = 0; i < _bandCount - 1; i++) {
+        if (pressure >= _refPressure[i] && pressure <= _refPressure[i + 1]) {
+            lo = i;
+            hi = i + 1;
+            float dp = _refPressure[hi] - _refPressure[lo];
+            t = (dp > 1e-3f) ? (pressure - _refPressure[lo]) / dp : 0.0f;
+            return;
+        }
+    }
+
+    // Fallback (should not reach here)
+    lo = hi = _bandCount - 1;
+    t = 0.0f;
+}
+
+float PressureBandedTable::lookup(float valvePercent, float supplyPressure) const {
+    if (_bandCount == 0) return 0.0f;
+    if (_bandCount == 1) return _flowTables[0].lookup(valvePercent);
+
+    uint8_t lo, hi;
+    float t;
+    findBrackets(supplyPressure, lo, hi, t);
+
+    float flowLo = _flowTables[lo].lookup(valvePercent);
+    float flowHi = _flowTables[hi].lookup(valvePercent);
+    return flowLo + t * (flowHi - flowLo);
+}
+
+float PressureBandedTable::inverseLookup(float desiredFlow, float supplyPressure) const {
+    if (_bandCount == 0) return 0.0f;
+    if (_bandCount == 1) return _flowTables[0].inverseLookup(desiredFlow);
+
+    uint8_t lo, hi;
+    float t;
+    findBrackets(supplyPressure, lo, hi, t);
+
+    // Inverse lookup on each band: desired flow → V%
+    float vpctLo = _flowTables[lo].inverseLookup(desiredFlow);
+    float vpctHi = _flowTables[hi].inverseLookup(desiredFlow);
+
+    // Interpolate V% between bands
+    return vpctLo + t * (vpctHi - vpctLo);
+}
+
+
+// ============================================================================
 // PIController
 // ============================================================================
 
@@ -146,21 +234,30 @@ void InspValveController::setCvTable(const LookupPoint* points, uint8_t count) {
     _cvTable.load(points, count);
 }
 
+void InspValveController::setFlowBand(uint8_t bandIndex, float refPressure,
+                                       const LookupPoint* points, uint8_t count) {
+    _flowSurface.loadBand(bandIndex, refPressure, points, count);
+}
+
 float InspValveController::computeFeedforward(float desiredFlow_slm,
                                                float supplyPressure_mbar,
                                                float downstreamPressure_mbar) const {
-    if (!_config.useFeedforward || _cvTable.getCount() == 0) return 0.0f;
+    if (!_config.useFeedforward) return 0.0f;
 
-    // Q = Cv(I) * sqrt(Psupply - Pdownstream)
-    // => Cv_needed = Q / sqrt(deltaP)
-    // => I = Cv_inv(Cv_needed)
+    // Prefer 2D flow surface if loaded
+    if (_flowSurface.getBandCount() > 0) {
+        // Inverse lookup on the pressure-banded flow surface:
+        // Given desired flow and live supply pressure → V%
+        // The V% is used directly as the feedforward output
+        return _flowSurface.inverseLookup(desiredFlow_slm, supplyPressure_mbar);
+    }
+
+    // Fallback to legacy Cv table
+    if (_cvTable.getCount() == 0) return 0.0f;
     float deltaP = supplyPressure_mbar - downstreamPressure_mbar;
-    if (deltaP < 1.0f) deltaP = 1.0f;  // Avoid division by zero
-
+    if (deltaP < 1.0f) deltaP = 1.0f;
     float sqrtDeltaP = sqrtf(deltaP);
     float cvNeeded = desiredFlow_slm / sqrtDeltaP;
-
-    // Inverse lookup: Cv → current
     return _cvTable.inverseLookup(cvNeeded);
 }
 
@@ -371,26 +468,87 @@ void LocalValveController::setDefaults() {
     begin(_muxRouter, config);
 
     // ======================================================================
-    // PLACEHOLDER VALVE LINEARIZATION TABLES
+    // PRESSURE-BANDED FLOW TABLES (2D flow surface)
     // ======================================================================
-    // These are example curves — replace with measured data during calibration.
+    // Each band is a V% → Flow (slm) table at a reference supply pressure.
+    // Measured from CC1 sweeps at ~3, 4.5, and 6 bar set pressures.
+    // The feedforward does inverse lookup: desired flow + live Psupply → V%.
     //
-    // Inspiratory valve Cv table: x = current (A), y = Cv (slm / sqrt(mbar))
-    // At reference deltaP of ~1000 mbar (1 bar supply), Cv ≈ flow/31.6
-    // Example: a valve that passes 0-60 slm with 0-1.5A current
-    static const LookupPoint inspCvTable[] = {
-        {0.00f, 0.000f},
-        {0.10f, 0.050f},
-        {0.30f, 0.200f},
-        {0.50f, 0.500f},
-        {0.80f, 1.000f},
-        {1.00f, 1.400f},
-        {1.20f, 1.700f},
-        {1.50f, 1.900f},   // Saturation region
-        {2.00f, 2.000f},
+    // Reduced to ≤16 points per band: dead zone → cracking → active → saturation.
+
+    // Band 0: P_ref = 302 kPa (~3 bar) — CC1 sweep, Psupply 302→186 kPa
+    static const LookupPoint airFlowBand0[] = {
+        { 0.00f,    0.0f},    // Dead zone
+        { 5.00f,    0.0f},    // Still closed
+        { 5.40f,    0.23f},   // Just cracking
+        { 5.80f,    1.38f},
+        { 6.00f,    3.06f},
+        { 6.40f,    9.27f},
+        { 6.80f,   16.08f},
+        { 7.20f,   23.79f},
+        { 7.60f,   32.31f},
+        { 8.00f,   42.32f},
+        { 8.40f,   52.92f},
+        { 8.80f,   65.84f},
+        { 9.20f,   89.53f},
+        { 9.60f,  110.56f},
+        {10.00f,  111.79f},   // Saturated (~186 kPa supply)
+        {14.00f,  112.39f},   // Flat at max
     };
-    _airValve.setCvTable(inspCvTable, sizeof(inspCvTable) / sizeof(inspCvTable[0]));
-    _o2Valve.setCvTable(inspCvTable, sizeof(inspCvTable) / sizeof(inspCvTable[0]));
+
+    // Band 1: P_ref = 451 kPa (~4.5 bar) — CC1 sweep, Psupply 451→298 kPa
+    static const LookupPoint airFlowBand1[] = {
+        { 0.00f,    0.0f},    // Dead zone
+        { 5.00f,    0.0f},    // Still closed
+        { 5.50f,    0.17f},   // Just cracking
+        { 6.00f,    1.42f},
+        { 6.50f,    8.73f},
+        { 7.00f,   18.87f},
+        { 7.50f,   31.04f},
+        { 8.00f,   46.83f},
+        { 8.50f,   62.05f},
+        { 9.00f,   74.92f},
+        { 9.50f,  111.69f},
+        {10.00f,  147.76f},
+        {10.50f,  157.79f},
+        {11.00f,  159.17f},   // Saturated (~298 kPa supply)
+        {14.00f,  159.47f},   // Flat at max
+    };
+
+    // Band 2: P_ref = 604 kPa (~6 bar) — CC1 sweep, Psupply 604→376 kPa
+    static const LookupPoint airFlowBand2[] = {
+        { 0.00f,    0.0f},    // Dead zone
+        { 5.00f,    0.0f},    // Still closed
+        { 5.60f,    0.17f},   // Just cracking
+        { 6.00f,    0.91f},
+        { 6.40f,    4.08f},
+        { 6.80f,   12.89f},
+        { 7.20f,   22.48f},
+        { 7.60f,   34.40f},
+        { 8.00f,   48.91f},
+        { 8.40f,   68.54f},
+        { 8.80f,   84.81f},
+        { 9.20f,  103.18f},
+        { 9.60f,  127.14f},
+        {10.00f,  160.04f},
+        {10.60f,  194.88f},
+        {11.20f,  195.50f},   // Saturated (~384 kPa supply)
+    };
+
+    _airValve.setFlowBand(0, 302.0f, airFlowBand0,
+                          sizeof(airFlowBand0) / sizeof(airFlowBand0[0]));
+    _airValve.setFlowBand(1, 451.0f, airFlowBand1,
+                          sizeof(airFlowBand1) / sizeof(airFlowBand1[0]));
+    _airValve.setFlowBand(2, 604.0f, airFlowBand2,
+                          sizeof(airFlowBand2) / sizeof(airFlowBand2[0]));
+
+    // O2 valve: use same tables as air until separately characterized
+    _o2Valve.setFlowBand(0, 302.0f, airFlowBand0,
+                         sizeof(airFlowBand0) / sizeof(airFlowBand0[0]));
+    _o2Valve.setFlowBand(1, 451.0f, airFlowBand1,
+                         sizeof(airFlowBand1) / sizeof(airFlowBand1[0]));
+    _o2Valve.setFlowBand(2, 604.0f, airFlowBand2,
+                         sizeof(airFlowBand2) / sizeof(airFlowBand2[0]));
 
     // Expiratory valve pressure table: x = PEEP setpoint (mbar), y = current (A)
     // Higher current = more closed = higher held pressure
@@ -407,7 +565,7 @@ void LocalValveController::setDefaults() {
     _expValve.setPressureTable(expPressureTable,
                                sizeof(expPressureTable) / sizeof(expPressureTable[0]));
 
-    Serial.println("[LLC] Local valve controllers initialized with placeholder tables");
+    Serial.println("[LLC] Local valve controllers initialized with pressure-banded flow tables");
     Serial.println("[LLC] ⚠️ Calibrate valve tables before clinical use!");
 }
 

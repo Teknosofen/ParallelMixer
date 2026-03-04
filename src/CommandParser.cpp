@@ -120,6 +120,19 @@ void CommandParser::printHelp() {
   Serial.println("AH high pressure alarm [mbar] float");
   Serial.println("AL low pressure alarm [mbar] float");
   Serial.println("AA apnea alarm time [s] float");
+  Serial.println();
+  Serial.println("Local valve control / calibration:");
+  Serial.println("-------------------");
+  Serial.println("LE1/LE0 enable/disable local valve control (LLC)");
+  Serial.println("LS print LLC status and configuration");
+  Serial.println("CC<ch>[,maxV[,stepV[,settleMs]]]  valve characterization");
+  Serial.println("  ch: 1=air, 2=O2  (exp valve not supported)");
+  Serial.println("  maxV: max voltage (default 12.0 V)");
+  Serial.println("  stepV: voltage step (default 0.1 V)");
+  Serial.println("  settleMs: settle time per step (default 200 ms)");
+  Serial.println("  Example: CC1         (air valve, defaults)");
+  Serial.println("  Example: CC2,10,0.2,300  (O2, 10V max, 0.2V step, 300ms)");
+  Serial.println("CX abort valve characterization");
 }
 
 void CommandParser::printSettings(const SystemConfig& config, int controller_mode,
