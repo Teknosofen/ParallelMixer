@@ -13,7 +13,11 @@ ActuatorControl::ActuatorControl()
     _sweep_start_time_us(0),
     _sweep_phase(0.0),
     _serialMuxRouter(nullptr),
-    _muxAddress(0) {
+    _muxAddress(0),
+    _pwmPin(-1),
+    _pwmChannel(0),
+    _pwmResolutionBits(8),
+    _pwmMaxDuty(255) {
 
   // Default PID configuration
   _pid_config.p_gain = 1.0;
@@ -317,16 +321,33 @@ ControlState ActuatorControl::getControlState() const {
 }
 
 void ActuatorControl::outputToValve(float signal_percent) {
-  // Only send if value has changed (avoid flooding serial with redundant commands)
-  // Use small tolerance (0.01%) to handle floating point comparison
+  // Only send if value has changed (avoid flooding serial / PWM updates)
   if (fabsf(signal_percent - _last_sent_valve_signal) < 0.01f) {
     return;  // No change, skip sending
   }
 
-  // Send valve command via serial to external actuator (percentage-based)
-  char actuatorCMD = 'V';
-  sendSerialCommand(actuatorCMD, signal_percent);
+  if (_pwmPin >= 0) {
+    // Direct PWM output — bypass serial MUX
+    float clamped = constrain(signal_percent, 0.0f, 100.0f);
+    uint32_t duty = (uint32_t)(clamped * (float)_pwmMaxDuty / 100.0f);
+    ledcWrite(_pwmChannel, duty);
+  } else {
+    // Normal path: send valve command via serial to external actuator
+    sendSerialCommand('V', signal_percent);
+  }
   _last_sent_valve_signal = signal_percent;
+}
+
+void ActuatorControl::setPwmOutput(int8_t pin, uint32_t freq_hz, uint8_t resolution_bits, uint8_t ledcChannel) {
+  _pwmPin = pin;
+  _pwmChannel = ledcChannel;
+  _pwmResolutionBits = resolution_bits;
+  _pwmMaxDuty = (1UL << resolution_bits) - 1;
+  if (pin >= 0) {
+    ledcSetup(ledcChannel, freq_hz, resolution_bits);
+    ledcAttachPin(pin, ledcChannel);
+    ledcWrite(ledcChannel, 0);  // Start at 0% duty
+  }
 }
 
 void ActuatorControl::analogOutMCP4725(uint16_t dac_output) {

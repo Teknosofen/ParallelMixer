@@ -79,6 +79,14 @@ public:
   void setExternalPWM(bool external);
   bool isExternalPWM() const;
 
+  // Direct PWM output (bypasses serial MUX)
+  // Call once during setup to route this actuator's output to a local PWM pin.
+  // freq_hz: PWM carrier frequency (e.g., 20000 for 20 kHz)
+  // resolution_bits: duty cycle resolution (e.g., 8 → 0-255)
+  // ledcChannel: ESP32 LEDC channel 0-15 (default 0; pick unique per PWM pin)
+  void setPwmOutput(int8_t pin, uint32_t freq_hz = 20000, uint8_t resolution_bits = 8, uint8_t ledcChannel = 0);
+  bool hasPwmOutput() const { return _pwmPin >= 0; }
+
   // Get current control state
   ControlState getControlState() const;
 
@@ -134,6 +142,12 @@ private:
   // Serial MUX router pointer and address
   SerialMuxRouter* _serialMuxRouter;
   uint8_t _muxAddress;
+
+  // Direct PWM output (alternative to serial MUX)
+  int8_t  _pwmPin;             // -1 = not configured (use serial MUX)
+  uint8_t _pwmChannel;         // LEDC channel (0-15)
+  uint8_t _pwmResolutionBits;  // e.g. 8 → max duty = 255
+  uint32_t _pwmMaxDuty;        // (1 << resolution) - 1
 
   // Output methods (now accepts percentage)
   void outputToValve(float signal_percent);

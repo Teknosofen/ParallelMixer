@@ -471,7 +471,10 @@ void setup() {
     actuators[i].initialize();
     actuators[i].setSerialMuxRouter(&muxRouter, i);
   }
+  // Configure actuator channel 4 for direct PWM output (motor controller on GPIO21)
+  actuators[4].setPwmOutput(21, 20000, 8);  // GPIO21, 20 kHz, 8-bit (0-255)
   hostCom.printf("Initialized %d MUX channels for parallel operation\n", NUM_MUX_CHANNELS);
+  hostCom.println("  Channel 4: direct PWM on GPIO21 (20 kHz, 8-bit)");
 
   // Initialize ventilator controller (HLC)
   ventilator.begin(&muxRouter);

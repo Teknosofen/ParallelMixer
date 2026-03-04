@@ -53,7 +53,8 @@ P-Mixer is an embedded ventilator control system providing:
 - **Backlight**: GPIO38
 - **User Inputs**: 
   - Interaction key: GPIO0 (WiFi control)
-  - Boot button: GPIO21 (settings display)
+  - Boot button: GPIO14 (settings display)
+- **PWM Output**: GPIO21 — 20 kHz motor controller (MUX channel 4)
 
 ### Communication Buses
 
@@ -81,6 +82,7 @@ P-Mixer is an embedded ventilator control system providing:
 | Serial (USB CDC) | Host communication | USB | Auto | ASCII commands |
 | Serial1 | MUX router (actuators) | TX=17, RX=18 | 230400 | `[ADDR]<CMD>VALUE\n` |
 | Serial2 | FDO2 oxygen sensor | TX=12, RX=13 | 19200 | ASCII CR-terminated |
+| GPIO21 PWM | Motor controller | GPIO21 | 20 kHz | 8-bit duty cycle (0-255) |
 
 ---
 
@@ -92,7 +94,8 @@ P-Mixer is an embedded ventilator control system providing:
 main.cpp (Main Loop)
 ├── SensorReader (Bus 0) ──────────► I2C Wire
 ├── SensorReader (Bus 1) ──────────► I2C Wire1
-├── ActuatorControl[6] ────────────► SerialMuxRouter ──► Serial1
+├── ActuatorControl[0–3,5] ─────────► SerialMuxRouter ──► Serial1
+├── ActuatorControl[4] ────────────► GPIO21 PWM (direct, 20 kHz)
 ├── VentilatorController ──────────► SerialMuxRouter
 ├── FDO2_Sensor ───────────────────► Serial2
 ├── CommandParser ─────────────────► Serial (USB)
@@ -416,9 +419,15 @@ struct SweepConfig {
 ```
 
 **Hardware Abstraction**:
-- No direct GPIO control
-- All valve commands sent via `SerialMuxRouter`
-- Percentage values (0-100%) converted to hardware units as needed
+- Default output: valve commands sent via `SerialMuxRouter` (percentage → `V<percent>\n`)
+- Optional direct PWM: call `setPwmOutput(pin, freq, bits)` during setup to route output to a local GPIO instead of serial MUX. The 0–100% signal is scaled to PWM duty cycle.
+- This keeps all signal generation logic (PID, sine, step, triangle, sweep) completely unaware of the output hardware.
+
+**PWM Motor Example (Channel 4)**:
+```cpp
+actuators[4].setPwmOutput(21, 20000, 8);  // GPIO21, 20 kHz, 8-bit duty cycle
+// Now M4, V50, C2 (sine), etc. all drive the motor via PWM
+```
 
 ### 2. VentilatorController
 
@@ -875,7 +884,7 @@ muxRouter.update();  // Processes all available serial bytes
 #define MUX_AIR_VALVE   1  // Air supply
 #define MUX_O2_VALVE    2  // O2 supply
 #define MUX_EXP_VALVE   3  // Expiratory valve
-#define MUX_NC          4  // Reserved
+#define MUX_MOTOR       4  // Motor PWM (direct GPIO21, not serial MUX)
 #define MUX_BLOWER      5  // Blower motor
 ```
 

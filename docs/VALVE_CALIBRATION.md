@@ -317,6 +317,16 @@ After the flow surface is populated, the PI controllers provide fine corrections
 - After updating tables, re-run a quick `CC` sweep to verify the feedforward matches.
 - The feedforward extrapolates outside the stored pressure range — keep bands covering your expected operating pressures (typically 200–600 kPa).
 
+### Low-Pressure Extrapolation
+
+The `PressureBandedTable` extrapolates linearly below the lowest band and above the highest band. For example, if the lowest band is at 302 kPa and the live supply pressure drops to 200 kPa, the algorithm uses bands 0 and 1 with a **negative** interpolation weight $t$:
+
+$$t = \frac{P_{live} - P_{band0}}{P_{band1} - P_{band0}} = \frac{200 - 302}{451 - 302} \approx -0.68$$
+
+This gives sensible results (higher V% for lower pressure — correct trend), but accuracy degrades the further you extrapolate. During the 3-bar sweep, the supply droops to ~186 kPa at full flow, where the valve is already saturated. The PI controllers will compensate for extrapolation error, but the feedforward will be less precise.
+
+**Recommendation:** If your application regularly operates below the lowest characterized pressure (e.g., weak regulators that droop below 250 kPa under load), add a **4th band** at ~200 kPa by running `CC1` with the regulator set to ~2 bar. The `PressureBandedTable` supports up to 4 bands, and the extra band significantly improves feedforward accuracy at low pressures.
+
 ---
 
 ## 8. Quick Reference
