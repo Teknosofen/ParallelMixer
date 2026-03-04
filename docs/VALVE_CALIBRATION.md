@@ -2,9 +2,17 @@
 
 This document describes the steps required to populate the cracking current and valve linearization tables for the P-Mixer ventilator control system, including the automated `CC` characterization command and how to integrate the results into the software.
 
+> See also: [ARCHITECTURE.md — Valve Characterization & Linearization](ARCHITECTURE.md#valve-characterization--linearization) for the design rationale and data-structure details.
+
 ---
 
-## 1. Cracking Current Calibration
+## 1. Why a 2D Flow Surface?
+
+Proportional solenoid valves are pressure-dependent: the same drive percentage (V%) produces different flows at different supply pressures. A single 1D lookup table cannot capture this. We therefore use a **PressureBandedTable** — 2–4 piecewise-linear V% → Flow tables, each measured at a different supply pressure. The feedforward interpolates between bands at runtime using the live ABP2 supply-pressure reading.
+
+---
+
+## 2. Cracking Current Calibration
 
 ### Purpose
 The cracking current is the minimum current required to open the valve against the spring and supply pressure. For inspiratory valves, it is pressure-dependent:
@@ -26,10 +34,10 @@ $$I_{crack} = I_{base} + k \cdot P_{supply}$$
 
 ---
 
-## 2. Automated Valve Characterization (CC Command)
+## 3. Automated Valve Characterization (CC Command)
 
 ### Overview
-The `CC` serial command runs an automated voltage sweep on an inspiratory valve. It ramps voltage from 0 V to a configurable maximum in fixed steps, waits for the flow to settle at each step, samples sensors multiple times, and computes the valve's flow coefficient $Cv$ at each operating point. At the end of the sweep, it prints a code-ready lookup table that can be pasted directly into the software.
+The `CC` serial command runs an automated V% sweep on an inspiratory valve. It ramps V% from 0 to a configurable maximum in fixed steps, waits for the flow to settle at each step, samples sensors multiple times, and prints CSV data rows plus a code-ready flow table. Run this sweep at **2–3 different supply pressures** to populate multiple bands of the `PressureBandedTable`.
 
 ### Supported Valves
 | MUX Channel | Valve | Sensors Used |
@@ -42,14 +50,14 @@ The `CC` serial command runs an automated voltage sweep on an inspiratory valve.
 ### Command Syntax
 
 ```
-CC<channel>[,maxVoltage[,stepVoltage[,settleTime_ms]]]
+CC<channel>[,maxV[,stepV[,settleTime_ms]]]
 ```
 
 | Parameter       | Type   | Default | Description |
 |:----------------|:------:|:-------:|:------------|
 | `channel`       | int    | —       | **Required.** 1 = air, 2 = O2 |
-| `maxVoltage`    | float  | 12.0    | Maximum voltage of the sweep (V) |
-| `stepVoltage`   | float  | 0.1     | Voltage increment per step (V) |
+| `maxV`          | float  | 12.0    | Maximum V% of the sweep |
+| `stepV`         | float  | 0.1     | V% increment per step |
 | `settleTime_ms` | int    | 200     | Time to wait after each step before sampling (ms) |
 
 Samples per step is fixed at **10** (averaged).
@@ -58,11 +66,11 @@ Samples per step is fixed at **10** (averaged).
 
 | Command            | Description |
 |:-------------------|:------------|
-| `CC1`              | Air valve, 0–12 V in 0.1 V steps, 200 ms settle |
+| `CC1`              | Air valve, 0–12% in 0.1% steps, 200 ms settle |
 | `CC2`              | O2 valve, same defaults |
-| `CC1,10`           | Air valve, 0–10 V max |
-| `CC1,12,0.2,300`   | Air valve, 0.2 V steps, 300 ms settle |
-| `CC2,8,0.05,500`   | O2 valve, fine steps, long settle |
+| `CC1,14`           | Air valve, 0–14% max |
+| `CC1,14,0.2,250`   | Air valve, 0.2% steps, 250 ms settle |
+| `CC2,14,0.25,250`  | O2 valve, 0.25% steps, 250 ms settle |
 
 ### Aborting a Sweep
 
@@ -70,119 +78,124 @@ Samples per step is fixed at **10** (averaged).
 CX
 ```
 
-Immediately sets the valve voltage to 0 V and returns to idle.
+Immediately sets the valve V% to 0 and returns to idle.
 
 ### What Happens During a Sweep
 
-1. The characterizer sends `sendSetVoltage(channel, 0.0)` and begins settling.
+1. The characterizer sends `V0.00` to the selected MUX channel and begins settling.
 2. At each step it:
    - Waits `settleTime_ms` for the flow to stabilize.
-   - Samples flow, supply pressure, and Paw `samplesPerStep` times and averages them.
-   - Computes $Cv = Q / \sqrt{P_{supply} - P_{aw}}$ (only when $\Delta P > 1\,\text{mbar}$ and $Q > 0.001\,\text{slm}$).
+   - Samples flow, supply pressure, and Paw 10 times and averages them.
+   - Computes $Cv = Q / \sqrt{P_{supply} - P_{aw}}$ as a diagnostic (not used for feedforward).
    - Prints a CSV data row to the serial console.
 3. After the final step it:
-   - Sets voltage back to 0 V.
+   - Sets V% back to 0.
    - Prints `# --- Sweep complete ---`.
-   - Prints a **code-ready C++ lookup table** (see Section 4).
+   - Prints a **code-ready C++ flow table** with `setFlowBand()` instructions.
 
 ### Serial Output Format
 
 **CSV data rows** (printed during sweep):
 ```
-# V(V),   Flow(slm),  Psupply(mbar),  Paw(mbar),  Cv(slm/sqrt(mbar))
-0.000,  0.000,      4012.3,         1.25,       0.00000
-0.100,  0.000,      4010.1,         1.30,       0.00000
-0.200,  0.312,      4008.5,         2.10,       0.00493
+# V(V), Flow(slm),      Psupply(mbar),  Paw(mbar),      Cv(slm/sqrt(mbar))
+0.000,  0.001,          603.7,          -0.09,          0.00000
+5.600,  0.173,          603.0,          -0.06,          0.00705
 ...
-12.000, 58.200,     3850.0,         15.30,      0.93912
+14.000, 193.885,        375.8,          19.01,          10.26461
 ```
 
 **Code-ready table** (printed at end):
 ```cpp
 // ============================================================
-// Air valve Cv table from characterization
-// Avg Psupply ≈ 4010 mbar (4.01 bar)
-// MUX channel 1, 121 points
-// x = voltage (V), y = Cv (slm / sqrt(mbar))
+// Air valve flow table from characterization
+// P_ref ≈ 604 mbar (initial supply pressure)
+// MUX channel 1, 71 points
+// x = V%, y = Flow (slm)
 // ============================================================
-static const LookupPoint airCvTable[] = {
-    {0.000f, 0.00000f},  // 0.00 slm @ 4012 mbar
-    {0.100f, 0.00000f},  // 0.00 slm @ 4010 mbar
+static const LookupPoint airFlowBand_P604[] = {
+    {0.000f, 0.001f},    // @ 604 mbar
+    {5.600f, 0.173f},    // @ 603 mbar
     ...
-    {12.000f, 0.93912f},  // 58.20 slm @ 3850 mbar
 };
-// Table has 121 entries.
+// Usage: _airValve.setFlowBand(<bandIndex>, 604.0f, airFlowBand_P604, <count>);
 ```
 
 ### Prerequisites
 - Supply gas connected and regulated to operational pressure.
 - Downstream flow path open (patient wye disconnected or open to atmosphere).
 - Serial terminal connected at host baud rate.
-- LLC should be **disabled** (`LE0`) so it does not interfere with the raw voltage sweep.
+- LLC should be **disabled** (`LE0`) so it does not interfere with the raw V% sweep.
 
 ---
 
-## 3. Manual Valve Characterization
+## 4. Multi-Pressure Characterization Procedure
 
-### Inspiratory Valves (Air/O2)
-- **Table:** Voltage (V) → Cv (slm/√mbar)
-- **Procedure:**
-  1. **Set supply pressure** to a typical operating value (e.g., 4 bar).
-  2. **Step voltage** from 0 to max rated value in increments (e.g., 0.1 V).
-  3. **Measure flow** at each voltage using a calibrated flow sensor.
-  4. **Calculate Cv:** $Cv = Q / \sqrt{P_{supply} - P_{downstream}}$
-  5. **Record (voltage, Cv)** pairs.
-  6. **Populate** the table in code (see Section 5).
+### Goal
+Capture the valve's full 2D flow surface by running sweeps at 2–3 different supply pressures.
 
-### Expiratory Valve
-- **Table:** Pressure setpoint (mbar) → Current (A)
-- **Procedure:**
-  1. **Set up a test lung or chamber** with pressure sensor.
-  2. **Step current** from just above cracking to max in increments.
-  3. **Measure resulting PEEP pressure** at each current.
-  4. **Record (pressure, current)** pairs.
-  5. **Populate** the table in code (see Section 5).
+### Recommended Steps
+
+1. Set the supply regulator to **~3 bar**. Run:
+   ```
+   CC1,14,0.2,250
+   ```
+   Copy the printed flow table from the serial terminal. Note the initial Psupply (P_ref).
+
+2. Increase the regulator to **~4.5 bar**. Run:
+   ```
+   CC1,14,0.25,250
+   ```
+   Copy the second table.
+
+3. Increase the regulator to **~6 bar**. Run:
+   ```
+   CC1,14,0.2,250
+   ```
+   Copy the third table.
+
+4. Repeat steps 1–3 for the **O2 valve** (`CC2`) if it has a different valve type.
+
+### Supply Pressure Droop
+
+During a sweep, the supply pressure droops as flow increases (limited by regulator capacity). This is **expected and acceptable** — each data row records the actual supply pressure at that point. The P_ref stored per band is the initial (zero-flow) supply pressure.
 
 ---
 
-## 4. Interpreting the Characterization Output
+## 5. Reducing Points & Selecting Table Data
 
-### Selecting Points for the Lookup Table
+The `PiecewiseLinearTable` supports a maximum of **16 points**. A full sweep at 0.2% steps over 14% produces 71 data points. Reduce as follows:
 
-The `PiecewiseLinearTable` supports a maximum of **16 points**. A full `CC` sweep at 0.1 V steps over 12 V produces 121 data points — far more than 16. You need to select representative points:
+1. **Dead zone** — all V% values where flow ≈ 0. Keep only V% = 0 (flow = 0) and the last zero-flow point (just before cracking).
+2. **Cracking region** — the first 2–3 points where flow becomes significant.
+3. **Active (linear) region** — pick ~8–10 evenly spaced points spanning the full stroke.
+4. **Saturation** — where flow stops increasing (valve or sensor limit). Keep 1–2 points.
 
-1. **Copy** the code-ready table from the serial terminal output.
-2. **Remove dead-zone rows** where Cv ≈ 0 (below cracking voltage) — keep only the first zero and the first non-zero.
-3. **Remove saturation rows** where Cv stops increasing significantly — keep only the last one or two.
-4. **Thin the middle region** by selecting ~10-12 evenly spaced points that capture the valve's shape (linear region, knee, saturation).
-5. **Result**: 12–16 points spanning the full operating range.
-
-### Example: Reducing 121 Points to 12
+### Example: Reducing 71 Points to 16 (6-bar sweep)
 
 ```cpp
-static const LookupPoint airCvTable[] = {
-    {0.000f, 0.00000f},   // Dead zone
-    {1.200f, 0.00100f},   // Just opened (cracking voltage)
-    {2.000f, 0.05000f},   // Low flow
-    {3.000f, 0.15000f},
-    {4.000f, 0.30000f},
-    {5.000f, 0.48000f},
-    {6.000f, 0.62000f},
-    {7.000f, 0.74000f},
-    {8.000f, 0.82000f},
-    {9.000f, 0.88000f},   // Approaching saturation
-    {10.000f, 0.92000f},
-    {12.000f, 0.94000f},  // Full saturation
+static const LookupPoint airFlowBand2[] = {
+    { 0.00f,    0.0f},    // Dead zone
+    { 5.00f,    0.0f},    // Still closed
+    { 5.60f,    0.17f},   // Just cracking
+    { 6.00f,    0.91f},
+    { 6.40f,    4.08f},
+    { 6.80f,   12.89f},
+    { 7.20f,   22.48f},
+    { 7.60f,   34.40f},
+    { 8.00f,   48.91f},
+    { 8.40f,   68.54f},
+    { 8.80f,   84.81f},
+    { 9.20f,  103.18f},
+    { 9.60f,  127.14f},
+    {10.00f,  160.04f},
+    {10.60f,  194.88f},
+    {11.20f,  195.50f},   // Saturated
 };
 ```
 
-### Extracting the Cracking Voltage
-
-From the CSV output, find the first row where flow becomes non-zero. The voltage at that row is the **cracking voltage**. Use this to set `crackBaseOffset_A` and `crackPressCoeff_A_per_bar` (after converting to current if your final control units are current-based) or adjust the first non-zero point in the table.
-
 ---
 
-## 5. Updating the Software with Measured Values
+## 6. Updating the Software with Measured Values
 
 All placeholder values live in the `LocalValveController::setDefaults()` method in `src/LocalValveController.cpp`.
 
@@ -217,51 +230,49 @@ And for the expiratory valve (pressure-independent):
 config.expValve.crackBaseOffset_A = 0.10f;  // PLACEHOLDER
 ```
 
-### Step 2: Replace the Inspiratory Cv Lookup Table
+### Step 2: Replace the Flow Surface Tables
 
-Find the placeholder table (around line 381):
+Find the pressure-banded flow tables section in `setDefaults()` (search for `PRESSURE-BANDED FLOW TABLES`). Each band is a `static const LookupPoint[]` array loaded via `setFlowBand()`.
 
-```cpp
-// PLACEHOLDER VALVE LINEARIZATION TABLES
-...
-static const LookupPoint inspCvTable[] = {
-    {0.00f, 0.000f},
-    {0.10f, 0.050f},
-    ...
-    {2.00f, 2.000f},
-};
-_airValve.setCvTable(inspCvTable, sizeof(inspCvTable) / sizeof(inspCvTable[0]));
-_o2Valve.setCvTable(inspCvTable, sizeof(inspCvTable) / sizeof(inspCvTable[0]));
-```
-
-**Option A — Same table for both valves** (if air and O2 valves are identical):
-
-Replace the `inspCvTable[]` array contents with your reduced characterization data (≤16 points), keeping the `setCvTable()` calls the same.
-
-**Option B — Separate tables** (if valves differ):
+For each CC sweep you ran at a different supply pressure, create a reduced table (≤16 points) and load it as a band. Bands **must** be loaded in ascending pressure order.
 
 ```cpp
-static const LookupPoint airCvTable[] = {
-    // Paste reduced table from CC1 output
-    {0.000f, 0.00000f},
-    {1.200f, 0.00100f},
-    ...
+// Band 0: measured at ~3 bar (P_ref = 302 kPa)
+static const LookupPoint airFlowBand0[] = {
+    { 0.00f,    0.0f},    // Dead zone
+    { 5.00f,    0.0f},    // Still closed
+    { 5.40f,    0.23f},   // Just cracking
+    { 5.80f,    1.38f},
+    { 6.00f,    3.06f},
+    // ... 8-10 active region points ...
+    { 9.60f,  110.56f},
+    {10.00f,  111.79f},   // Saturated
+    {14.00f,  112.39f},   // Flat at max
 };
 
-static const LookupPoint o2CvTable[] = {
-    // Paste reduced table from CC2 output
-    {0.000f, 0.00000f},
-    {1.100f, 0.00080f},
-    ...
-};
+// Band 1: measured at ~4.5 bar (P_ref = 451 kPa)
+static const LookupPoint airFlowBand1[] = { /* ... */ };
 
-_airValve.setCvTable(airCvTable, sizeof(airCvTable) / sizeof(airCvTable[0]));
-_o2Valve.setCvTable(o2CvTable, sizeof(o2CvTable) / sizeof(o2CvTable[0]));
+// Band 2: measured at ~6 bar (P_ref = 604 kPa)
+static const LookupPoint airFlowBand2[] = { /* ... */ };
+
+_airValve.setFlowBand(0, 302.0f, airFlowBand0, count0);
+_airValve.setFlowBand(1, 451.0f, airFlowBand1, count1);
+_airValve.setFlowBand(2, 604.0f, airFlowBand2, count2);
 ```
+
+**O2 valve**: If not yet characterized, use the same air tables:
+```cpp
+_o2Valve.setFlowBand(0, 302.0f, airFlowBand0, count0);
+_o2Valve.setFlowBand(1, 451.0f, airFlowBand1, count1);
+_o2Valve.setFlowBand(2, 604.0f, airFlowBand2, count2);
+```
+
+Once you run `CC2` sweeps, create separate O2 tables.
 
 ### Step 3: Replace the Expiratory Pressure Lookup Table
 
-The expiratory valve must be characterized manually (Section 3). Find the placeholder (around line 398):
+The expiratory valve must be characterized manually (step current, measure PEEP). Find the table (search for `expPressureTable`):
 
 ```cpp
 static const LookupPoint expPressureTable[] = {
@@ -276,7 +287,7 @@ Replace with measured `(PEEP_mbar, current_A)` pairs.
 
 ### Step 4: Tune PI Gains
 
-After the lookup tables are populated, the PI controllers provide fine corrections around the feedforward operating point. Start with conservative gains and increase:
+After the flow surface is populated, the PI controllers provide fine corrections around the feedforward operating point. Start with conservative gains and increase:
 
 | Parameter | Starting Value | Description |
 |:----------|:--------------:|:------------|
@@ -296,24 +307,26 @@ After the lookup tables are populated, the PI controllers provide fine correctio
 
 ---
 
-## 6. Tips
-- Use slow voltage ramps (smaller step, longer settle) for higher accuracy.
-- Repeat measurements at different supply pressures for advanced compensation.
+## 7. Tips
+- Use slow V% ramps (smaller step, longer settle) for higher accuracy.
+- **Always run sweeps at 2–3 different supply pressures** to populate the 2D flow surface.
+- Supply pressure droop during a sweep is normal — each data row records the actual pressure.
 - Document ambient conditions (temperature, humidity).
 - Save raw serial output to a text file for future reference.
 - The `PiecewiseLinearTable` interpolates linearly between points — more points in the "knee" region improves accuracy.
 - After updating tables, re-run a quick `CC` sweep to verify the feedforward matches.
+- The feedforward extrapolates outside the stored pressure range — keep bands covering your expected operating pressures (typically 200–600 kPa).
 
 ---
 
-## 7. Quick Reference
+## 8. Quick Reference
 
 | Command | Description |
 |:--------|:------------|
 | `CC1` | Characterize air valve (defaults) |
 | `CC2` | Characterize O2 valve (defaults) |
-| `CC1,10,0.2,300` | Air valve, max 10V, 0.2V step, 300ms settle |
-| `CX` | Abort sweep, voltage → 0V |
+| `CC1,14,0.2,250` | Air valve, max 14%, 0.2% step, 250ms settle |
+| `CX` | Abort sweep, V% → 0 |
 | `LE1` | Enable local valve control |
 | `LE0` | Disable local valve control (pass-through) |
 | `LS` | Print LLC status and config |
@@ -322,8 +335,10 @@ After the lookup tables are populated, the PI controllers provide fine correctio
 
 | File | What to Change |
 |:-----|:---------------|
-| `src/LocalValveController.cpp` | Cv tables, cracking current, PI gains (in `setDefaults()`) |
-| `include/LocalValveController.hpp` | Config struct definitions (if adding new parameters) |
+| `src/LocalValveController.cpp` | Flow surface tables, cracking current, PI gains (in `setDefaults()`) |
+| `include/LocalValveController.hpp` | `PiecewiseLinearTable`, `PressureBandedTable`, controller class definitions |
+| `src/ValveCharacterizer.cpp` | Sweep state machine and output formatting |
+| `include/ValveCharacterizer.hpp` | Characterizer config structs |
 
 ---
 

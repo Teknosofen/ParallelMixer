@@ -1,6 +1,6 @@
 # P-Mixer Ventilator Control System - Technical Overview
 
-**Last Updated**: 2026-02-03  
+**Last Updated**: 2026-03-04  
 **Version**: Based on current codebase  
 **Platform**: ESP32-S3 (LilyGo T-Display S3)
 
@@ -12,14 +12,15 @@
 3. [Core Architecture](#core-architecture)
 4. [Sensor Management](#sensor-management)
 5. [Control Systems](#control-systems)
-6. [Communication Protocols](#communication-protocols)
-7. [Web Interface](#web-interface)
-8. [User Interface](#user-interface)
-9. [Data Structures](#data-structures)
-10. [Timing & Performance](#timing--performance)
-11. [Configuration](#configuration)
-12. [Safety Features](#safety-features)
-13. [Extension Points](#extension-points)
+6. [Valve Characterization & Linearization](#valve-characterization--linearization)
+7. [Communication Protocols](#communication-protocols)
+8. [Web Interface](#web-interface)
+9. [User Interface](#user-interface)
+10. [Data Structures](#data-structures)
+11. [Timing & Performance](#timing--performance)
+12. [Configuration](#configuration)
+13. [Safety Features](#safety-features)
+14. [Extension Points](#extension-points)
 
 ---
 
@@ -597,6 +598,212 @@ struct VentilatorConfig {
     float apneaTime_s;
 };
 ```
+
+---
+
+## Valve Characterization & Linearization
+
+### The Problem
+
+Proportional solenoid valves are **non-linear**: the relationship between drive signal (V%) and delivered gas flow depends on both the valve's magnetic/mechanical characteristics and the instantaneous supply pressure upstream. A simple 1D lookup table "V% → flow" breaks down because:
+
+1. **Supply pressure droop** — the gas regulator cannot maintain perfect pressure under load. At high flows, supply pressure drops significantly (e.g., a 6-bar set pressure may droop to 3.8 bar at full flow).
+2. **Pressure-dependent opening** — the valve seat force balance changes with supply pressure, so the same V% produces different flows at different pressures.
+
+Measurements confirm that the flow coefficient $Cv$ varies 10–100% at the same V% depending on supply pressure. A single curve is therefore insufficient for accurate feedforward.
+
+### Solution: 2D Pressure-Banded Flow Surface
+
+Instead of one lookup table, we store **2–4 piecewise-linear tables**, each mapping **V% → Flow (slm)** at a known reference supply pressure. At runtime, the feedforward interpolates (or extrapolates) between tables based on the live supply pressure reading.
+
+```
+                 Flow (slm)
+                  ▲
+            200 ─ │                           ╱ Band 2 (604 kPa)
+                  │                       ╱──
+            150 ─ │                  ╱───╱
+                  │             ╱───╱          Band 1 (451 kPa)
+            100 ─ │        ╱───╱──
+                  │   ╱───╱                    Band 0 (302 kPa)
+             50 ─ │──╱
+                  │╱
+              0 ──┼──────────────────────────► V %
+                  5     7     9    11    14
+```
+
+Each band captures the valve's full characteristic (dead zone → cracking → linear region → saturation) at one supply pressure. The 2D surface $Q = f(V\%, P_{supply})$ enables:
+
+- **Forward lookup**: given V% and $P_{supply}$, predict flow.
+- **Inverse lookup** (used by feedforward): given desired flow and $P_{supply}$, compute V%.
+
+### Data Structures
+
+#### PiecewiseLinearTable (1D)
+
+A sorted array of up to **16** $(x, y)$ points with linear interpolation between them and flat extrapolation beyond the endpoints.
+
+```
+Class: PiecewiseLinearTable   (include/LocalValveController.hpp)
+  MAX_POINTS = 16
+  load(points[], count)
+  lookup(x) → y               // Forward: V% → Flow (or pressure → current)
+  inverseLookup(y) → x        // Inverse: Flow → V% (table must be monotonic)
+```
+
+#### PressureBandedTable (2D)
+
+Holds up to **4** `PiecewiseLinearTable` instances, each tagged with a reference pressure.
+
+```
+Class: PressureBandedTable   (include/LocalValveController.hpp)
+  MAX_BANDS = 4
+  loadBand(index, refPressure, points[], count)
+  lookup(V%, Psupply) → Flow
+  inverseLookup(Flow, Psupply) → V%
+```
+
+**Interpolation algorithm** (`inverseLookup`):
+
+1. Find the two pressure bands that bracket the live $P_{supply}$.
+2. Perform an inverse lookup in each band: $V\%_{lo}$ and $V\%_{hi}$.
+3. Linearly interpolate: $V\% = V\%_{lo} + t \cdot (V\%_{hi} - V\%_{lo})$ where $t = \frac{P_{supply} - P_{lo}}{P_{hi} - P_{lo}}$.
+4. If $P_{supply}$ is outside the band range, extrapolate (same formula, $t < 0$ or $t > 1$).
+
+### Automated Characterization (CC Command)
+
+The `ValveCharacterizer` class performs an automated voltage sweep on an inspiratory valve. It is a non-blocking state machine that runs inside the main control loop.
+
+#### Workflow
+
+```
+              CC1,14,0.2,250          ┌─────────┐
+  User ──────────────────────────────►│  IDLE   │
+                                      └────┬────┘
+                                           │ start()
+                                           ▼
+                                      ┌─────────┐  settleTime_ms
+                                      │ SETTLE  │◄──────────────┐
+                                      └────┬────┘               │
+                                           │ timer expired      │
+                                           ▼                    │
+                                      ┌─────────┐              │
+                                      │ SAMPLE  │──► avg N readings
+                                      └────┬────┘              │
+                                           │ print CSV row      │
+                                           │ V += stepV         │
+                                           │ V ≤ maxV? ────────┘
+                                           │ V > maxV
+                                           ▼
+                                      ┌─────────┐
+                                      │  DONE   │──► print flow table
+                                      └─────────┘    set V = 0
+```
+
+1. At each step, the characterizer sends `V<percent>` to the selected MUX channel and waits for the flow to settle.
+2. It averages 10 sensor readings (flow, supply pressure, Paw) and prints a CSV row.
+3. After the final step, it prints a ready-to-paste C++ flow table for one pressure band.
+
+#### Command Syntax
+
+```
+CC<channel>[,maxV[,stepV[,settleMs]]]
+CX                                      — abort sweep
+```
+
+| Parameter | Default | Description |
+|:----------|:-------:|:-----------|
+| `channel` | — | **Required.** 1 = air (Bus 0 sensors), 2 = O2 (Bus 1 sensors) |
+| `maxV` | 12.0 | Maximum V% of sweep |
+| `stepV` | 0.1 | V% increment per step |
+| `settleMs` | 200 | Stabilization time per step (ms) |
+
+> **Important:** Disable the LLC (`LE0`) before running a sweep so the local controller does not fight the characterizer.
+
+#### Recommended Procedure
+
+1. Connect supply gas at a known regulated pressure (e.g., 3 bar).
+2. Open downstream flow path (no patient, wye disconnected).
+3. Run `CC1,14,0.2,250` — sweep air valve 0–14% in 0.2% steps, 250 ms settle.
+4. Save the printed flow table.
+5. **Change regulator to a different pressure** (e.g., 4.5 bar, then 6 bar) and repeat.
+6. You now have 2–3 flow tables at different supply pressures — one per band.
+
+#### Reducing Points
+
+Each sweep may produce 50–70 data points, but `PiecewiseLinearTable` holds at most 16. Select representative points:
+
+- **Dead zone** — keep only one zero-flow point (e.g., V% = 0) and the first non-zero (cracking).
+- **Active region** — pick 8–12 evenly spaced points covering the full stroke.
+- **Saturation** — keep the last rising point and one flat point at high V%.
+
+### Integration into the Control System
+
+The tables live in `LocalValveController::setDefaults()` inside [src/LocalValveController.cpp](../src/LocalValveController.cpp). Each band is a `static const LookupPoint[]` array loaded via `setFlowBand()`:
+
+```cpp
+// Band 0: measured at ~3 bar (P_ref = 302 kPa)
+static const LookupPoint airFlowBand0[] = {
+    { 0.00f,    0.0f},    // Dead zone
+    { 5.00f,    0.0f},    // Still closed
+    { 5.40f,    0.23f},   // Just cracking
+    { 5.80f,    1.38f},
+    ...
+    {14.00f,  112.39f},   // Flat at max
+};
+_airValve.setFlowBand(0, 302.0f, airFlowBand0, count);
+```
+
+Repeat for bands 1 and 2 at higher pressures. The O2 valve uses the same tables until separately characterized (`CC2`).
+
+### Feedforward Path
+
+During closed-loop control the feedforward converts a flow setpoint into a V% command before the PI controllers add corrections:
+
+```
+                                            ┌──────────────┐
+  desiredFlow ──────────────────────────────►│  2D Inverse  │──► V%_ff
+  supplyPressure (live, from ABP2) ─────────►│    Lookup    │
+                                            └──────────────┘
+                                                    │
+                                                    ▼
+                 ┌────────┐   ┌────────┐     ┌──────────┐
+  flowSetpoint──►│Flow PI │──►│  MIN   │────►│ + V%_ff  │──► V% command to MUX
+  pressureMax──►│Press PI│──►│ SELECT │     └──────────┘
+                 └────────┘   └────────┘
+```
+
+The `computeFeedforward()` method in `InspValveController`:
+
+1. Checks if a `PressureBandedTable` has been loaded (`_flowSurface.getBandCount() > 0`).
+2. If yes: calls `_flowSurface.inverseLookup(desiredFlow, supplyPressure)` → returns V%.
+3. If no: falls back to the legacy 1D $Cv$ table (for backward compatibility).
+
+### Current Calibration Data (Air Valve)
+
+Three bands measured via `CC1` sweeps on the air valve (MUX channel 1):
+
+| Band | Set Pressure | P_ref (kPa) | Points | Max Flow (slm) | Saturates at V% |
+|:----:|:------------:|:-----------:|:------:|:--------------:|:---------------:|
+| 0 | 3 bar | 302 | 16 | 112 | ~10.0 |
+| 1 | 4.5 bar | 451 | 15 | 159 | ~11.0 |
+| 2 | 6 bar | 604 | 16 | 195 | ~11.2 |
+
+Key observations:
+- **Cracking V%** is approximately 5.4–5.6% across all supply pressures.
+- **Maximum flow** scales with supply pressure: higher pressure → higher flow before the valve or sensor saturates.
+- **Supply droop** is significant: a 6-bar setpoint droops to ~3.8 bar at max flow, confirming the need for the 2D surface.
+
+> The O2 valve currently uses the air valve tables as a placeholder — run `CC2` at multiple pressures to get its own characterization.
+
+### Files Reference
+
+| File | Contents |
+|:-----|:---------|
+| [include/LocalValveController.hpp](../include/LocalValveController.hpp) | `PiecewiseLinearTable`, `PressureBandedTable`, `InspValveController`, `ExpValveController`, `LocalValveController` class definitions |
+| [src/LocalValveController.cpp](../src/LocalValveController.cpp) | Implementation; `setDefaults()` contains all flow tables, PI gains, cracking current |
+| [include/ValveCharacterizer.hpp](../include/ValveCharacterizer.hpp) | `ValveCharacterizer` class definition, `CharacterizationPoint` struct |
+| [src/ValveCharacterizer.cpp](../src/ValveCharacterizer.cpp) | Sweep state machine, CSV output, flow table printing |
+| [docs/VALVE_CALIBRATION.md](VALVE_CALIBRATION.md) | Step-by-step calibration procedure and command reference |
 
 ---
 
