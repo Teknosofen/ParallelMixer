@@ -1,8 +1,11 @@
 #include "SensorReader.hpp"
 
 SensorReader::SensorReader(TwoWire* wire, const char* name, uint32_t clockFreq)
-  : _wire(wire), _name(name), _clockFreq(clockFreq), _hasSFM3505(false), _hasABP2(false), _hasELVH(false) {
+  : _wire(wire), _name(name), _clockFreq(clockFreq),
+    _hasSFM3505(false), _hasSFM3304(false), _hasABP2(false), _hasELVH(false),
+    _sfm3304_scaleFactor(120), _sfm3304_offset(0) {
   // Detection flags will be set during initialize()
+  // SFM3304 defaults: scale=120, offset=0 (typical for air calibration)
 }
 
 bool SensorReader::initialize() {
@@ -15,11 +18,12 @@ bool SensorReader::initialize() {
 
   // Reset detection flags
   _hasSFM3505 = false;
+  _hasSFM3304 = false;
   _hasABP2 = false;
   _hasELVH = false;
 
   // ============================================================================
-  // Detect SFM3505 flow sensor
+  // Detect flow sensor at 0x2E — assume SFM3505 (SFM3503 compatible)
   // ============================================================================
   Serial.printf("[%s] Checking for SFM3505 at address 0x%02X...\n", _name, I2Cadr_SFM3505);
   _wire->beginTransmission(I2Cadr_SFM3505);
@@ -29,7 +33,6 @@ bool SensorReader::initialize() {
     Serial.printf("[%s] ✅ SFM3505 detected\n", _name);
     _hasSFM3505 = true;
 
-    // Start continuous measurement
     delay(50);
     Serial.printf("[%s] Starting SFM3505 continuous measurement...\n", _name);
     if (startSFM3505Measurement()) {
@@ -38,7 +41,7 @@ bool SensorReader::initialize() {
       Serial.printf("[%s] ⚠️ SFM3505 start command failed (may already be running)\n", _name);
     }
   } else {
-    Serial.printf("[%s] ⚠️ SFM3505 not detected at 0x%02X\n", _name);
+    Serial.printf("[%s] ⚠️ No flow sensor detected at 0x%02X\n", _name);
   }
 
   // ============================================================================
@@ -82,8 +85,8 @@ bool SensorReader::initialize() {
   // ============================================================================
   // Summary
   // ============================================================================
-  int detectedCount = (_hasSFM3505 ? 1 : 0) + (_hasABP2 ? 1 : 0) + (_hasELVH ? 1 : 0);
-  Serial.printf("[%s] Sensor detection complete: %d/3 sensors found\n", _name, detectedCount);
+  int detectedCount = (_hasSFM3505 ? 1 : 0) + (_hasSFM3304 ? 1 : 0) + (_hasABP2 ? 1 : 0) + (_hasELVH ? 1 : 0);
+  Serial.printf("[%s] Sensor detection complete: %d sensors found\n", _name, detectedCount);
 
   // Return true if at least one sensor was detected
   return (detectedCount > 0);
@@ -715,4 +718,272 @@ uint8_t SensorReader::calculateCRC8(const uint8_t* data, uint8_t len) {
   }
   
   return crc;
+}
+
+// ============================================================================
+// SFM3304 Flow Sensor Methods
+// ============================================================================
+// SFM3304-D: Single-use proximal flow sensor
+//   - I2C address 0x2E (same as SFM3505!)
+//   - 16-bit signed flow + 16-bit temperature + 16-bit status word
+//   - Each word followed by CRC8
+//   - Flow range: ±250 slm (air calibration)
+//   - Max operating pressure: 1.14 bar
+//   - Scale factor and offset read from sensor via 0x3661
+// ============================================================================
+
+bool SensorReader::identifySFM3304() {
+  // Try to read the SFM3304 product identifier (0xE102).
+  // The SFM3505 does NOT support this command (its product-ID is 0x365B)
+  // so a successful read with a known product prefix means SFM3304.
+  uint32_t productId;
+  uint64_t serialNumber;
+  if (readSFM3304ProductId(productId, serialNumber)) {
+    // SFM3304 product identifiers start with 0x07050500 (datasheet Table 13)
+    // Upper 24 bits encode product; lower 8 bits = revision
+    uint32_t productBase = productId & 0xFFFFFF00;
+    Serial.printf("[%s] Flow sensor product ID: 0x%08lX, serial: %llu\n",
+                  _name, (unsigned long)productId, (unsigned long long)serialNumber);
+    // Accept any SFM3304 variant (0x070505xx)
+    if (productBase == 0x07050500) {
+      return true;
+    }
+    // Also accept broadly — if the read worked and gave a valid response,
+    // it's likely an SFM3304 (the SFM3505 would NAK on 0xE102)
+    Serial.printf("[%s] Unknown product ID 0x%08lX — assuming SFM3304\n",
+                  _name, (unsigned long)productId);
+    return true;
+  }
+  return false;
+}
+
+bool SensorReader::sendSFM3304Command(uint16_t command) {
+  _wire->beginTransmission(I2Cadr_SFM3304);
+  _wire->write((uint8_t)(command >> 8));    // MSB
+  _wire->write((uint8_t)(command & 0xFF));  // LSB
+  byte error = _wire->endTransmission(true);
+  if (error != 0) {
+    Serial.printf("[%s] ❌ SFM3304 command 0x%04X failed (error=%d)\n", _name, command, error);
+    return false;
+  }
+  return true;
+}
+
+bool SensorReader::sendSFM3304CommandWithArg(uint16_t command, uint16_t argument) {
+  // Some SFM3304 commands take a 16-bit argument word + CRC
+  uint8_t argBytes[2] = { (uint8_t)(argument >> 8), (uint8_t)(argument & 0xFF) };
+  uint8_t argCrc = calculateCRC8(argBytes, 2);
+
+  _wire->beginTransmission(I2Cadr_SFM3304);
+  _wire->write((uint8_t)(command >> 8));
+  _wire->write((uint8_t)(command & 0xFF));
+  _wire->write(argBytes[0]);
+  _wire->write(argBytes[1]);
+  _wire->write(argCrc);
+  byte error = _wire->endTransmission(true);
+  if (error != 0) {
+    Serial.printf("[%s] ❌ SFM3304 command 0x%04X(arg=0x%04X) failed (error=%d)\n",
+                  _name, command, argument, error);
+    return false;
+  }
+  return true;
+}
+
+bool SensorReader::startSFM3304Measurement() {
+  // Start continuous measurement (air calibration): command 0x3603
+  // First measurement available after 4 ms; allow ~50 ms for small
+  // accuracy deviations to settle.
+  if (!sendSFM3304Command(SFM3304_CMD_START_CONTINUOUS)) {
+    return false;
+  }
+  delay(4);  // Wait for first measurement
+  return true;
+}
+
+bool SensorReader::stopSFM3304Measurement() {
+  // Sensor needs up to 0.5 ms to power down heater and enter idle
+  if (!sendSFM3304Command(SFM3304_CMD_STOP_CONTINUOUS)) {
+    return false;
+  }
+  delay(1);
+  return true;
+}
+
+bool SensorReader::readSFM3304Data(float& flow, float& temperature, uint16_t& statusWord) {
+  // During continuous measurement, read 9 bytes:
+  //   Bytes 0-1: Flow (int16, signed)
+  //   Byte  2:   CRC8 of bytes 0-1
+  //   Bytes 3-4: Temperature (int16)
+  //   Byte  5:   CRC8 of bytes 3-4
+  //   Bytes 6-7: Status word (uint16)
+  //   Byte  8:   CRC8 of bytes 6-7
+
+  uint8_t bytesRead = _wire->requestFrom(I2Cadr_SFM3304, (uint8_t)9);
+  if (bytesRead != 9) {
+    static bool errorPrinted = false;
+    if (!errorPrinted) {
+      Serial.printf("[%s] SFM3304 read error: expected 9 bytes, got %d\n", _name, bytesRead);
+      errorPrinted = true;
+    }
+    while (_wire->available()) _wire->read();  // flush
+    return false;
+  }
+
+  uint8_t rawData[9];
+  for (uint8_t i = 0; i < 9; i++) {
+    rawData[i] = _wire->read();
+  }
+
+  // Validate CRC for each word
+  uint8_t crc_flow = calculateCRC8(&rawData[0], 2);
+  uint8_t crc_temp = calculateCRC8(&rawData[3], 2);
+  uint8_t crc_stat = calculateCRC8(&rawData[6], 2);
+
+  if (crc_flow != rawData[2] || crc_temp != rawData[5] || crc_stat != rawData[8]) {
+    static uint32_t crcErrorCount = 0;
+    crcErrorCount++;
+    if (crcErrorCount <= 5) {
+      Serial.printf("[%s] ⚠️ SFM3304 CRC error #%lu: flow[%02X vs %02X] temp[%02X vs %02X] stat[%02X vs %02X]\n",
+                    _name, (unsigned long)crcErrorCount,
+                    crc_flow, rawData[2], crc_temp, rawData[5], crc_stat, rawData[8]);
+    }
+    return false;
+  }
+
+  // Extract raw signed values
+  int16_t rawFlow = (int16_t)((rawData[0] << 8) | rawData[1]);
+  int16_t rawTemp = (int16_t)((rawData[3] << 8) | rawData[4]);
+  statusWord      = (uint16_t)((rawData[6] << 8) | rawData[7]);
+
+  // Scale to physical units
+  // Flow: (rawFlow - offset) / scaleFactor   → slm
+  // Temperature: rawTemp / 200.0             → °C
+  if (_sfm3304_scaleFactor != 0) {
+    flow = (float)(rawFlow - _sfm3304_offset) / (float)_sfm3304_scaleFactor;
+  } else {
+    flow = 0.0f;
+  }
+  temperature = (float)rawTemp / 200.0f;
+
+  return true;
+}
+
+bool SensorReader::readSFM3304Flow(float& flow) {
+  // Read only the first 3 bytes (flow word + CRC) — aborts early with NACK
+  // This is faster when temperature/status are not needed.
+  uint8_t bytesRead = _wire->requestFrom(I2Cadr_SFM3304, (uint8_t)3);
+  if (bytesRead != 3) {
+    return false;
+  }
+
+  uint8_t rawData[3];
+  rawData[0] = _wire->read();
+  rawData[1] = _wire->read();
+  rawData[2] = _wire->read();
+
+  // CRC check
+  uint8_t crc = calculateCRC8(rawData, 2);
+  if (crc != rawData[2]) {
+    return false;
+  }
+
+  int16_t rawFlow = (int16_t)((rawData[0] << 8) | rawData[1]);
+  if (_sfm3304_scaleFactor != 0) {
+    flow = (float)(rawFlow - _sfm3304_offset) / (float)_sfm3304_scaleFactor;
+  } else {
+    flow = 0.0f;
+  }
+  return true;
+}
+
+bool SensorReader::readSFM3304ScaleOffset(int16_t& scaleFactor, int16_t& offset) {
+  // Command 0x3661 with argument = start measurement command code (0x3603 for air)
+  // Must be in idle mode (not measuring) to call this.
+  // Response: 9 bytes = scaleFactor(2) + CRC + offset(2) + CRC + unit(2) + CRC
+
+  if (!sendSFM3304CommandWithArg(SFM3304_CMD_READ_SCALE_OFFSET,
+                                  SFM3304_CMD_START_CONTINUOUS)) {
+    return false;
+  }
+  delay(2);
+
+  uint8_t bytesRead = _wire->requestFrom(I2Cadr_SFM3304, (uint8_t)9);
+  if (bytesRead != 9) {
+    Serial.printf("[%s] SFM3304 readScaleOffset: expected 9 bytes, got %d\n", _name, bytesRead);
+    while (_wire->available()) _wire->read();
+    return false;
+  }
+
+  uint8_t rawData[9];
+  for (uint8_t i = 0; i < 9; i++) {
+    rawData[i] = _wire->read();
+  }
+
+  // Validate CRCs
+  if (calculateCRC8(&rawData[0], 2) != rawData[2] ||
+      calculateCRC8(&rawData[3], 2) != rawData[5] ||
+      calculateCRC8(&rawData[6], 2) != rawData[8]) {
+    Serial.printf("[%s] ❌ SFM3304 readScaleOffset CRC error\n", _name);
+    return false;
+  }
+
+  scaleFactor = (int16_t)((rawData[0] << 8) | rawData[1]);
+  offset      = (int16_t)((rawData[3] << 8) | rawData[4]);
+  uint16_t unit = (uint16_t)((rawData[6] << 8) | rawData[7]);
+
+  Serial.printf("[%s] SFM3304 scale=%d, offset=%d, unit=0x%04X\n",
+                _name, scaleFactor, offset, unit);
+  return true;
+}
+
+bool SensorReader::readSFM3304ProductId(uint32_t& productId, uint64_t& serialNumber) {
+  // Command 0xE102 — only works in idle mode
+  // Response: 18 bytes = productId(4 bytes in 2 words with CRC) + serialNumber(8 bytes in 4 words with CRC)
+  // = 2×(2+1) + 4×(2+1) = 6 + 12 = 18 bytes
+
+  if (!sendSFM3304Command(SFM3304_CMD_READ_PRODUCT_ID)) {
+    return false;
+  }
+  delay(2);
+
+  uint8_t bytesRead = _wire->requestFrom(I2Cadr_SFM3304, (uint8_t)18);
+  if (bytesRead != 18) {
+    Serial.printf("[%s] SFM3304 readProductId: expected 18 bytes, got %d\n", _name, bytesRead);
+    while (_wire->available()) _wire->read();
+    return false;
+  }
+
+  uint8_t rawData[18];
+  for (uint8_t i = 0; i < 18; i++) {
+    rawData[i] = _wire->read();
+  }
+
+  // Validate CRCs for all 6 words
+  for (uint8_t w = 0; w < 6; w++) {
+    uint8_t idx = w * 3;
+    if (calculateCRC8(&rawData[idx], 2) != rawData[idx + 2]) {
+      Serial.printf("[%s] ❌ SFM3304 productId CRC error at word %d\n", _name, w);
+      return false;
+    }
+  }
+
+  // Extract product identifier (2 words = 4 data bytes)
+  productId = ((uint32_t)rawData[0] << 24) | ((uint32_t)rawData[1] << 16) |
+              ((uint32_t)rawData[3] << 8)  | rawData[4];
+
+  // Extract serial number (4 words = 8 data bytes)
+  serialNumber = ((uint64_t)rawData[6]  << 56) | ((uint64_t)rawData[7]  << 48) |
+                 ((uint64_t)rawData[9]  << 40) | ((uint64_t)rawData[10] << 32) |
+                 ((uint64_t)rawData[12] << 24) | ((uint64_t)rawData[13] << 16) |
+                 ((uint64_t)rawData[15] << 8)  | (uint64_t)rawData[16];
+
+  return true;
+}
+
+bool SensorReader::configureSFM3304Averaging(uint16_t avgWindow) {
+  // Command 0x366A with argument = averaging window
+  // N=0: average-until-read (default)
+  // N=1..128: fixed-N averaging
+  // Must be in idle mode (stop measurement first, then restart)
+  return sendSFM3304CommandWithArg(SFM3304_CMD_CONFIGURE_AVERAGING, avgWindow);
 }

@@ -3,24 +3,13 @@
 // Date: 2024
 
 #include <Arduino.h>
-#include <main.hpp>
-#include <TFT_eSPI.h>
-#include "PinConfig.h"            // Pin configuration
-#include "SensorReader.hpp"
-#include "ActuatorControl.hpp"
-#include "CommandParser.hpp"
-#include "ImageRenderer.hpp"
-#include "Button.hpp"
-#define PMIXER_GRAPH_DISPLAY_POINTS 512
-#include "PMixerWiFiServer.hpp"
-#include "SerialMuxRouter.hpp"
-#include "FDO2_Sensor.h"
-#include "VentilatorController.hpp"
-#include "LocalValveController.hpp"
-#include "ValveCharacterizer.hpp"
+#include "MainGlobals.hpp"
+#include "SensorPolling.hpp"
+#include "OutputFormatting.hpp"
+#include "DisplayUpdate.hpp"
 
 // ---------------------------------
-// logo BMP file as well as factory default config files arcan be stored in SPIFFS
+// logo BMP file as well as factory default config files can be stored in SPIFFS
 // to send to device run:
 // pio run --target uploadfs
 //
@@ -28,15 +17,9 @@
 // pio run --target cleanfs
 // ---------------------------------
 
-
-// in the TFT_eSPI TFT_eSPI_User_setup_Select.H ensure that the 
-// line 133 #include <User_Setups/Setup206_LilyGo_T_Display_S3.h>     // For the LilyGo T-Display S3 based ESP32S3 with ST7789 170 x 320 TFT
-
-// In the TFT_eSPI_User_setup.H 
-// line 55 #define ST7789_DRIVER      // Full configuration option, define additional parameters below for this display
-// line 87 #define TFT_WIDTH  170 // ST7789 170 x 320
-// line 92 #define TFT_HEIGHT 320 // ST7789 240 x 320
-
+// ============================================================================
+// Global state — definitions (declared extern in MainGlobals.hpp)
+// ============================================================================
 
 TFT_eSPI tft = TFT_eSPI();
 ImageRenderer renderer(tft);
@@ -46,13 +29,7 @@ SensorReader* sensors_bus0;   // GPIO43/44 - includes SFM3505, ABP2, ELVH
 SensorReader* sensors_bus1;   // GPIO10/11 - includes SFM3505, ABP2
 
 // Array of actuator controls - one per MUX channel for parallel operation
-// Each channel can run its own signal generator independently
-// Note: Pin parameter unused - all valve control via serial MUX commands
-// Channels: 0 = direct (no prefix), 1-5 = MUX channels with prefix
-static const uint8_t NUM_MUX_CHANNELS = 6;
 ActuatorControl actuators[NUM_MUX_CHANNELS];
-// Reference to currently selected actuator (for command interface)
-#define actuator actuators[sysConfig.mux_channel]
 
 CommandParser parser;
 SerialMuxRouter muxRouter(&Serial1);
@@ -85,183 +62,11 @@ bool sensors_bus1_initialized = false; // Bus 1 sensors
 uint32_t past_time;          // For GUI/serial output timing
 uint32_t control_past_time;  // For control system execution timing
 
-// ELVH helpers — single sensor may be on either bus
-inline float getELVH_Pressure() {
-  return (sensors_bus0 && sensors_bus0->hasELVH()) ? sensorData_bus0.elvh_pressure : sensorData_bus1.elvh_pressure;
-}
-inline float getELVH_Temperature() {
-  return (sensors_bus0 && sensors_bus0->hasELVH()) ? sensorData_bus0.elvh_temperature : sensorData_bus1.elvh_temperature;
-}
-
-void outputData() {
-  float elvh_p = getELVH_Pressure();
-  float elvh_t = getELVH_Temperature();
-
-  switch (sysConfig.quiet_mode) {
-    case 0:  // Verbose: Supply Pressure, Low Pressure, Temp, Air flow (Bus0 & Bus1), Valve signal
-      hostCom.printf("Paw: %.2f\tT: %.1f\tFlow0: %.3f\tP0: %.2f\tFlow1: %.3f\tP1: %.2f\tValve: %.2f\n",
-                     elvh_p,
-                     elvh_t,
-                     sensorData_bus0.sfm3505_air_flow,
-                     sensorData_bus0.supply_pressure,
-                     sensorData_bus1.sfm3505_air_flow,
-                     sensorData_bus1.supply_pressure,
-                     actuator.getValveControlSignal());
-      break;
-
-    case 1:  // Quiet - no output
-      break;
-
-    case 2:  // Debug: Integrator, Error, Valve, Flow, Air
-      {
-        ControlState state = actuator.getControlState();
-        hostCom.printf("I %.1f E %.1f V %.2f F %.2f Air %.3f\n",
-                       state.integrator,
-                       state.error,
-                       actuator.getValveControlSignal(),
-                       sensorData_bus0.flow,
-                       sensorData_bus0.sfm3505_air_flow);
-      }
-      break;
-
-    case 3:  // Special - controller mode + setting + Serial1 actuator data
-      {
-        // Get controller mode
-        ControllerMode mode = actuator.getControllerMode();
-        String modeStr;
-        switch (mode) {
-          case PID_CONTROL:
-            modeStr = "PID";
-            break;
-          case VALVE_SET_VALUE_CONTROL:
-            modeStr = "Set";
-            break;
-          case SINE_CONTROL:
-            modeStr = "Sine";
-            break;
-          case STEP_CONTROL:
-            modeStr = "Step";
-            break;
-          case TRIANGLE_CONTROL:
-            modeStr = "Triangle";
-            break;
-          case SWEEP_CONTROL:
-            modeStr = "Sweep";
-            break;
-          default:
-            modeStr = "Unknown";
-            break;
-        }
-
-        // Get valve control signal and MUX router data (selected channel)
-        uint8_t ch = sysConfig.mux_channel;
-        float localValveCtrl = actuator.getValveControlSignal();
-        float actuatorCurrent = muxRouter.getCurrent(ch);
-
-        // Print unified output: Mode, MUX channel, Setting, and Received data
-        if (!muxRouter.isCurrentStale(ch)) {
-          hostCom.printf("[%s M%d] V=%.2f%% -> I=%.3fA",
-                         modeStr.c_str(), ch, localValveCtrl, actuatorCurrent);
-
-          // Show other available measurements if not stale
-          if (!muxRouter.isActualFlowStale(ch)) {
-            hostCom.printf(" F=%.2f", muxRouter.getActualFlow(ch));
-          }
-          if (!muxRouter.isActualPressureStale(ch)) {
-            hostCom.printf(" P=%.2f", muxRouter.getActualPressure(ch));
-          }
-          if (!muxRouter.isBlowerRPMStale(ch)) {
-            hostCom.printf(" R=%.1f", muxRouter.getBlowerRPM(ch));
-          }
-          hostCom.printf("\n");
-        } else {
-          hostCom.printf("[%s M%d] V=%.2f%% -> Actuator: STALE data\n",
-                         modeStr.c_str(), ch, localValveCtrl);
-        }
-      }
-      break;
-
-    case 4:  // Abbreviated: dP, Flow, Valve signal
-      hostCom.printf("%.2f %.2f %.2f\n",
-                     sensorData_bus0.differential_pressure,
-                     sensorData_bus0.flow,
-                     actuator.getValveControlSignal());
-      break;
-
-    case 5:  // Labeled: same data as q6, with labels for readability
-      {
-        float localValveCtrl = actuator.getValveControlSignal();
-        float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
-        float o2_hPa = fdo2Initialized ? fdo2Data.oxygenPartialPressure_hPa : -9.9f;
-        float o2_percent = fdo2Initialized ?
-          fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
-        hostCom.printf("SP0:%.2f LP:%.2f T:%.1f Air0:%.3f Air1:%.3f SP1:%.2f V:%.2f I:%.3f O2:%.2fhPa %.2f%%\n",
-                       sensorData_bus0.supply_pressure,
-                       elvh_p,
-                       elvh_t,
-                       sensorData_bus0.sfm3505_air_flow,
-                       sensorData_bus1.sfm3505_air_flow,
-                       sensorData_bus1.supply_pressure,
-                       localValveCtrl,
-                       actuatorCurrent,
-                       o2_hPa,
-                       o2_percent);
-      }
-      break;
-
-    // High-speed TSV: Time_ms, SupplyP0, LowP, Temp, Air0, Air1, SupplyP1, Valve%, Current, O2_hPa, O2%
-    case 6:  // High-speed data logging: tab-separated, no labels (minimal bandwidth)
-      {
-        float localValveCtrl = actuator.getValveControlSignal();
-        float actuatorCurrent = muxRouter.getCurrent(sysConfig.mux_channel);
-        float o2_hPa = fdo2Initialized ? fdo2Data.oxygenPartialPressure_hPa : -9.9f;
-        float o2_percent = fdo2Initialized ?
-          fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : -9.9f;
-        hostCom.printf("%lu\t%.2f\t%.2f\t%.1f\t%.3f\t%.3f\t%.2f\t%.2f\t%.3f\t%.2f\t%.2f\n",
-                       millis(),
-                       sensorData_bus0.supply_pressure,
-                       elvh_p,
-                       elvh_t,
-                       sensorData_bus0.sfm3505_air_flow,
-                       sensorData_bus1.sfm3505_air_flow,
-                       sensorData_bus1.supply_pressure,
-                       localValveCtrl,
-                       actuatorCurrent,
-                       o2_hPa,
-                       o2_percent);
-      }
-      break;
-
-    case 7:  // FDO2 Oxygen Sensor data
-      if (fdo2Initialized) {
-        hostCom.printf("O2: %.2f hPa (%.2f%%) | Temp: %.1f°C | Status: 0x%02X %s\n",
-                       fdo2Data.oxygenPartialPressure_hPa,
-                       fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, 
-                                                      fdo2Data.ambientPressure_mbar),
-                       fdo2Data.temperature_C,
-                       fdo2Data.status,
-                       fdo2Sensor.getStatusString(fdo2Data.status).c_str());
-      } else {
-        hostCom.println("FDO2 not initialized");
-      }
-      break;
-
-    case 8:  // FDO2 Extended/Raw data
-      if (fdo2Initialized) {
-        hostCom.printf("O2: %.2f hPa | T: %.1f°C | Phase: %.3f° | Signal: %.1f mV | Amb: %.1f mV | P: %.1f mbar | RH: %.1f%%\n",
-                       fdo2Data.oxygenPartialPressure_hPa,
-                       fdo2Data.temperature_C,
-                       fdo2Data.phaseShift_deg,
-                       fdo2Data.signalIntensity_mV,
-                       fdo2Data.ambientLight_mV,
-                       fdo2Data.ambientPressure_mbar,
-                       fdo2Data.relativeHumidity_percent);
-      } else {
-        hostCom.println("FDO2 not initialized");
-      }
-      break;
-  }
-}
+// LLC manual test mode (LF command)
+static bool  llcManualTestActive = false;
+static float llcManualAirFlow_slm = 0.0f;
+static float llcManualO2Flow_slm  = 0.0f;
+static float llcManualMaxPressure_mbar = 40.0f;  // Safety limit
 
 void setup() {
   // Initialize USB Serial - use default USB CDC
@@ -368,7 +173,7 @@ void setup() {
       bus1Addresses += String(address, HEX);
 
       // Identify known devices
-      if (address == 0x2E) hostCom.print(" - SFM3505 (flow)");
+      if (address == 0x2E) hostCom.print(" - SFM3505/SFM3304 (flow)");
       else if (address == 0x28) hostCom.print(" - ABP2 (pressure)");
       else if (address == 0x48) hostCom.print(" - ELVH-M100D (low pressure)");
       else if (address == 0x60) hostCom.print(" - MCP4725 (DAC)");
@@ -502,170 +307,33 @@ void setup() {
 }
 
 // ============================================================================
-// Extracted subsystem functions
+// Control functions (kept in main.cpp — tightly coupled to setup/loop)
 // ============================================================================
 
-/** Initialize the TFT display layout on first loop iteration. */
-void initDisplay() {
-  renderer.clear();
-  renderer.drawLabel();
-  renderer.drawStatusField();
-  renderer.drawWiFiField();
-  renderer.drawWiFiStatusDot(wifiServer.hasClients());
-  renderer.drawWiFiAPIP("WiFi OFF      ", "No SSID    ");
-  renderer.drawWiFiPromt("Long press: enable");
-}
-
-/** ABP2 Pressure Sensors on Bus 0 & Bus 1 - Asynchronous two-phase read. */
-void pollPressureSensors(uint32_t now) {
-  // --- Bus 0 ABP2 ---
-  static uint32_t lastPressureTime = 0;
-  static bool pressureCommandSent = false;
-
-  if (sensorsInitialized && sensors_bus0->hasABP2() && (now - lastPressureTime) >= sysConfig.PressSamplTime) {
-    lastPressureTime = now;
-
-    if (!pressureCommandSent) {
-      sensors_bus0->startABP2Measurement();
-      pressureCommandSent = true;
-    } else {
-      float pressure;
-      uint8_t status;
-      if (sensors_bus0->readABP2Pressure(pressure, status)) {
-        sensorData_bus0.supply_pressure = pressure;
-      }
-      pressureCommandSent = false;
-    }
-  } else if (!sensors_bus0->hasABP2()) {
-    sensorData_bus0.supply_pressure = -9.9;
-  }
-
-  // --- Bus 1 ABP2 (same async pattern) ---
-  static uint32_t lastBus1PressureTime = 0;
-  static bool bus1PressureCommandSent = false;
-
-  if (sensors_bus1_initialized && sensors_bus1->hasABP2() && (now - lastBus1PressureTime) >= sysConfig.PressSamplTime) {
-    lastBus1PressureTime = now;
-
-    if (!bus1PressureCommandSent) {
-      sensors_bus1->startABP2Measurement();
-      bus1PressureCommandSent = true;
-    } else {
-      float pressure;
-      uint8_t status;
-      if (sensors_bus1->readABP2Pressure(pressure, status)) {
-        sensorData_bus1.supply_pressure = pressure;
-      }
-      bus1PressureCommandSent = false;
-    }
-  } else if (!sensors_bus1_initialized || !sensors_bus1->hasABP2()) {
-    sensorData_bus1.supply_pressure = -9.9;
-  }
-}
-
-/** Read flow and low-pressure sensors on both I2C buses (fast control loop). */
-void readFastSensors(uint32_t now) {
-  // SFM3505 Flow Sensor - Bus 0
-  if (sensorsInitialized && sensors_bus0->hasSFM3505()) {
-    float sfm_air, sfm_o2;
-    if (sensors_bus0->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      sensorData_bus0.sfm3505_air_flow = sfm_air;
-      sensorData_bus0.sfm3505_o2_flow = sfm_o2;
-    } else {
-      sensorData_bus0.sfm3505_air_flow = -9.9;
-      sensorData_bus0.sfm3505_o2_flow = -9.9;
-    }
-  } else if (!sensors_bus0->hasSFM3505()) {
-    sensorData_bus0.sfm3505_air_flow = -9.9;
-    sensorData_bus0.sfm3505_o2_flow = -9.9;
-  }
-
-  // ELVH Low Pressure Sensor - Bus 0 (direct read, no command phase)
-  static uint32_t lastELVHTime = 0;
-  if (sensorsInitialized && sensors_bus0->hasELVH() && (now - lastELVHTime) >= sysConfig.PressSamplTime) {
-    lastELVHTime = now;
-
-    float elvh_pressure, elvh_temp;
-    uint8_t elvh_status;
-    if (sensors_bus0->readELVHPressureTemp(elvh_pressure, elvh_temp, elvh_status)) {
-      sensorData_bus0.elvh_pressure = elvh_pressure;
-      sensorData_bus0.elvh_temperature = elvh_temp;
-    } else {
-      sensorData_bus0.elvh_pressure = -9.9;
-      sensorData_bus0.elvh_temperature = -9.9;
-    }
-  } else if (!sensors_bus0->hasELVH()) {
-    sensorData_bus0.elvh_pressure = -9.9;
-    sensorData_bus0.elvh_temperature = -9.9;
-  }
-
-  // SFM3505 Flow Sensor - Bus 1
-  if (sensors_bus1_initialized && sensors_bus1->hasSFM3505()) {
-    float sfm_air, sfm_o2;
-    if (sensors_bus1->readSFM3505AllFlows(sfm_air, sfm_o2)) {
-      sensorData_bus1.sfm3505_air_flow = sfm_air;
-      sensorData_bus1.sfm3505_o2_flow = sfm_o2;
-    } else {
-      sensorData_bus1.sfm3505_air_flow = -9.9;
-      sensorData_bus1.sfm3505_o2_flow = -9.9;
-    }
-  } else if (!sensors_bus1_initialized || !sensors_bus1->hasSFM3505()) {
-    sensorData_bus1.sfm3505_air_flow = -9.9;
-    sensorData_bus1.sfm3505_o2_flow = -9.9;
-  }
-
-  // ELVH Low Pressure Sensor - Bus 1 (direct read, no command phase)
-  static uint32_t lastELVHTime_bus1 = 0;
-  if (sensors_bus1_initialized && sensors_bus1->hasELVH() && (now - lastELVHTime_bus1) >= sysConfig.PressSamplTime) {
-    lastELVHTime_bus1 = now;
-
-    float elvh_pressure, elvh_temp;
-    uint8_t elvh_status;
-    if (sensors_bus1->readELVHPressureTemp(elvh_pressure, elvh_temp, elvh_status)) {
-      sensorData_bus1.elvh_pressure = elvh_pressure;
-      sensorData_bus1.elvh_temperature = elvh_temp;
-    } else {
-      sensorData_bus1.elvh_pressure = -9.9;
-      sensorData_bus1.elvh_temperature = -9.9;
-    }
-  } else if (!sensors_bus1_initialized || !sensors_bus1->hasELVH()) {
-    sensorData_bus1.elvh_pressure = -9.9;
-    sensorData_bus1.elvh_temperature = -9.9;
-  }
-}
-
-/** FDO2 Optical Oxygen Sensor - async non-blocking read. */
-void pollFDO2(uint32_t now) {
-  static uint32_t lastFDO2StartTime = 0;
-  static bool fdo2MeasurementPending = false;
-
-  if (!fdo2Initialized) return;
-
-  if (fdo2MeasurementPending && fdo2Sensor.isResponseReady()) {
-    if (fdo2Sensor.getAsyncResult(fdo2Data)) {
-      if (fdo2Sensor.hasFatalError(fdo2Data.status)) {
-        if (sysConfig.quiet_mode == 0) {
-          hostCom.printf("⚠️ FDO2 Fatal Error: %s\n",
-                         fdo2Sensor.getStatusString(fdo2Data.status).c_str());
-        }
-      } else if (sysConfig.quiet_mode == 0 && fdo2Sensor.hasWarning(fdo2Data.status)) {
-        hostCom.printf("⚠️ FDO2 Warning: %s\n",
-                       fdo2Sensor.getStatusString(fdo2Data.status).c_str());
-      }
-    }
-    fdo2MeasurementPending = false;
-  }
-
-  if (!fdo2MeasurementPending && (now - lastFDO2StartTime) >= FDO2_SAMPLE_TIME_US) {
-    lastFDO2StartTime = now;
-    if (fdo2Sensor.startMeasurementAsync(true)) {
-      fdo2MeasurementPending = true;
-    }
-  }
-}
-
-/** Ventilator HLC update - gather measurements, run state machine, apply outputs via LLC. */
 void updateVentilatorControl(uint32_t now) {
+  // --- LLC manual test mode (LF command) ---
+  if (llcManualTestActive && !ventilator.isRunning()) {
+    LocalValveControllerSetpoints llcSP;
+    llcSP.airFlow_slm      = llcManualAirFlow_slm;
+    llcSP.o2Flow_slm       = llcManualO2Flow_slm;
+    llcSP.maxPressure_mbar = llcManualMaxPressure_mbar;
+    llcSP.expPressure_mbar = 0;
+    llcSP.expValveClosed   = false;
+    llcSP.expValveActive   = false;
+
+    LocalValveControllerMeasurements llcMeas;
+    llcMeas.airFlow_slm          = sensorData_bus0.sfm3505_air_flow;
+    llcMeas.o2Flow_slm           = sensorData_bus1.sfm3505_air_flow;
+    llcMeas.airSupplyPressure_kPa = sensorData_bus0.supply_pressure;
+    llcMeas.o2SupplyPressure_kPa  = sensorData_bus1.supply_pressure;
+    llcMeas.airwayPressure_mbar   = getELVH_Pressure();
+
+    float dt = sysConfig.control_interval / 1000000.0f;
+    localValveCtrl.update(llcSP, llcMeas, dt);
+    return;
+  }
+
+  // --- Normal ventilator mode ---
   if (!ventilator.isRunning()) return;
 
   VentilatorMeasurements ventMeas;
@@ -693,8 +361,8 @@ void updateVentilatorControl(uint32_t now) {
   LocalValveControllerMeasurements llcMeas;
   llcMeas.airFlow_slm = sensorData_bus0.sfm3505_air_flow;
   llcMeas.o2Flow_slm = sensorData_bus1.sfm3505_air_flow;
-  llcMeas.airSupplyPressure_mbar = sensorData_bus0.supply_pressure;
-  llcMeas.o2SupplyPressure_mbar = sensorData_bus1.supply_pressure;
+  llcMeas.airSupplyPressure_kPa = sensorData_bus0.supply_pressure;
+  llcMeas.o2SupplyPressure_kPa = sensorData_bus1.supply_pressure;
   llcMeas.airwayPressure_mbar = getELVH_Pressure();
 
   // LLC handles valve current computation OR pass-through
@@ -709,55 +377,6 @@ void executeActuatorControl() {
   for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
     actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
   }
-}
-
-/** Buffer high-speed data for WiFi web dashboard. */
-void bufferWiFiData() {
-  wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
-                         sensorData_bus0.supply_pressure,
-                         actuator.getValveControlSignal(),
-                         muxRouter.getCurrent(sysConfig.mux_channel),
-                         getELVH_Pressure(),
-                         getELVH_Temperature(),
-                         sensorData_bus1.sfm3505_air_flow,
-                         sensorData_bus1.supply_pressure);
-}
-
-/** Serial/GUI output and WiFi server status push (slow loop). */
-void updateSerialOutput() {
-  if (sensorsInitialized) {
-    outputData();
-  }
-
-  // WiFi server: Bus 0 data
-  wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);
-  wifiServer.updatePressure(sensorData_bus0.supply_pressure);
-  wifiServer.updateLowPressure(getELVH_Pressure());
-  wifiServer.updateTemperature(getELVH_Temperature());
-  wifiServer.updateValveSignal(actuator.getValveControlSignal());
-  wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));
-
-  // WiFi server: Bus 1 data
-  wifiServer.updateFlow2(sensorData_bus1.sfm3505_air_flow);
-  wifiServer.updatePressure2(sensorData_bus1.supply_pressure);
-
-  // WiFi server: Ventilator settings
-  VentilatorConfig cfg = ventilator.getConfig();
-  VentilatorStatus st = ventilator.getStatus();
-  wifiServer.updateVentilatorSettings(
-      ventilator.isRunning(),
-      ventilator.getStateString(),
-      cfg.respRate,
-      cfg.tidalVolume_mL,
-      cfg.ieRatio,
-      cfg.maxPressure_mbar,
-      cfg.peep_mbar,
-      cfg.maxInspFlow_slm,
-      cfg.targetFiO2,
-      st.breathCount,
-      st.peakPressure_mbar,
-      st.measuredVt_mL
-  );
 }
 
 /** Process serial communication, commands, and MUX channel changes. */
@@ -805,6 +424,67 @@ void processSerialCommands() {
         Serial.printf("  Exp: I=%.3fA FF=%.3f PressPI=%.3f\n",
                       exp.outputCurrent_A, exp.feedforwardCurrent_A,
                       exp.pressurePIOutput_A);
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "LF") {
+      // LLC manual flow test: LF<airflow>[,<o2flow>]
+      String params = cmd.substring(2);
+      params.trim();
+      if (params.length() > 0) {
+        int comma = params.indexOf(',');
+        if (comma < 0) {
+          llcManualAirFlow_slm = params.toFloat();
+          llcManualO2Flow_slm = 0.0f;
+        } else {
+          llcManualAirFlow_slm = params.substring(0, comma).toFloat();
+          llcManualO2Flow_slm  = params.substring(comma + 1).toFloat();
+        }
+        llcManualTestActive = true;
+        if (!localValveCtrl.isEnabled()) {
+          localValveCtrl.setEnabled(true);
+          localValveCtrl.reset();
+          Serial.println("[LF] LLC auto-enabled");
+        }
+        Serial.printf("[LF] Manual test: Air=%.1f slm, O2=%.1f slm, Plim=%.0f mbar\n",
+                      llcManualAirFlow_slm, llcManualO2Flow_slm, llcManualMaxPressure_mbar);
+        Serial.println("[LF] Use LS for status, LX to stop");
+      } else {
+        if (llcManualTestActive) {
+          Serial.printf("LF: Air=%.1f slm, O2=%.1f slm (active)\n",
+                        llcManualAirFlow_slm, llcManualO2Flow_slm);
+        } else {
+          Serial.println("Usage: LF<air_slm>[,<o2_slm>]  e.g. LF10 or LF20,5");
+        }
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "LX") {
+      // Stop LLC manual test
+      if (llcManualTestActive) {
+        llcManualTestActive = false;
+        llcManualAirFlow_slm = 0.0f;
+        llcManualO2Flow_slm = 0.0f;
+        localValveCtrl.reset();
+        // Send zero current to all valve channels to ensure safe stop
+        muxRouter.sendSetCurrent(1, 0.0f);  // Air
+        muxRouter.sendSetCurrent(2, 0.0f);  // O2
+        muxRouter.sendSetCurrent(3, 0.0f);  // Exp
+        Serial.println("[LX] Manual test stopped, valves zeroed");
+      } else {
+        Serial.println("[LX] No manual test running");
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "LP") {
+      // Set LLC manual test pressure limit
+      String val = cmd.substring(2);
+      val.trim();
+      if (val.length() > 0) {
+        llcManualMaxPressure_mbar = val.toFloat();
+        Serial.printf("[LP] Pressure limit = %.0f mbar\n", llcManualMaxPressure_mbar);
+      } else {
+        Serial.printf("LP=%.0f mbar\n", llcManualMaxPressure_mbar);
       }
       parser.clearCommand();
     }
@@ -869,119 +549,6 @@ void processSerialCommands() {
     ControllerMode mode = actuators[sysConfig.mux_channel].getControllerMode();
     hostCom.printf("Switched to MUX channel %d (mode: %d)\n", sysConfig.mux_channel, mode);
     lastMuxChannel = sysConfig.mux_channel;
-  }
-}
-
-/** Update TFT display fields and O2 reading at their own rates. */
-void updateDisplay() {
-  static uint32_t UILoopStartTime = micros();
-  if (micros() - UILoopStartTime > SET_UI_UPDATE_TIME) {
-    UILoopStartTime = micros();
-
-    if (!showVentilatorSettings) {
-      ControllerMode presentMode = actuator.getControllerMode();
-      String ctrlMode = "Valve Set";
-      switch (presentMode) {
-        case PID_CONTROL:          ctrlMode = "PID"; break;
-        case VALVE_SET_VALUE_CONTROL: ctrlMode = "Valve Set"; break;
-        case SINE_CONTROL:         ctrlMode = "Sine"; break;
-        case STEP_CONTROL:         ctrlMode = "Step"; break;
-        case TRIANGLE_CONTROL:     ctrlMode = "Triangle"; break;
-        case SWEEP_CONTROL:        ctrlMode = "Sweep"; break;
-        default:                   ctrlMode = "Unknown"; break;
-      }
-
-      String modeWithChannel = ctrlMode + " M" + String(sysConfig.mux_channel);
-      renderer.drawControllerMode(modeWithChannel);
-      wifiServer.updateMode(modeWithChannel);
-
-      renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");
-      renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");
-      String pressureStr = "P0: " + String(sensorData_bus0.supply_pressure / 100.0, 2) + " LP: " +
-                           String(getELVH_Pressure(), 1) + " " +
-                           String(getELVH_Temperature(), 1) + " C";
-      renderer.drawPressure(pressureStr);
-      renderer.drawPressure2(String(sensorData_bus1.supply_pressure / 100.0, 2) + " bar");
-      renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
-      renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
-      renderer.drawWiFiStatusDot(wifiServer.hasClients());
-    }
-  }
-
-  // O2 sensor display (slower rate)
-  static uint32_t O2DisplayLoopStartTime = micros();
-  if (micros() - O2DisplayLoopStartTime > FDO2_SAMPLE_TIME_US) {
-    O2DisplayLoopStartTime = micros();
-
-    if (!showVentilatorSettings) {
-      if (fdo2Initialized) {
-        renderer.drawO2(String(fdo2Data.oxygenPartialPressure_hPa, 1) + " hPa");
-      } else {
-        renderer.drawO2("N/A");
-      }
-    }
-  }
-}
-
-/** Handle WiFi toggle and ventilator settings display button presses. */
-void handleButtons() {
-  if (interactionKey1.wasReleased()) {
-    if (interactionKey1.wasLongPress()) {
-      hostCom.println("Key1 long press (>1s) - Enabling WiFi");
-      wifiServer.start();
-      renderer.drawWiFiAPIP(wifiServer.getApIpAddress(), PMIXERSSID);
-      renderer.drawWiFiPromt("Short press: disable");
-    } else {
-      hostCom.println("Key1 short press - Disabling WiFi");
-      wifiServer.stop();
-      hostCom.println("WiFi Access Point stopped");
-      renderer.drawWiFiAPIP("WiFi OFF", "No SSID");
-      renderer.drawWiFiPromt("Long press: enable");
-    }
-  }
-
-  if (interactionKey2.wasReleased()) {
-    if (interactionKey2.wasLongPress()) {
-      hostCom.println("Key2 long press - Showing ventilator settings");
-      showVentilatorSettings = true;
-
-      VentilatorConfig cfg = ventilator.getConfig();
-      VentilatorStatus st = ventilator.getStatus();
-
-      String line1 = String("Vent: ") + (ventilator.isRunning() ? "ON" : "OFF") +
-                     "  " + ventilator.getStateString();
-      String line2 = "RR=" + String(cfg.respRate, 1) + " VT=" + String(cfg.tidalVolume_mL, 0) +
-                     " IE=" + String(cfg.ieRatio, 2);
-      String line3 = "PI=" + String(cfg.maxPressure_mbar, 1) + " PE=" + String(cfg.peep_mbar, 1) +
-                     " MF=" + String(cfg.maxInspFlow_slm, 1);
-      String line4;
-      if (ventilator.isRunning()) {
-        line4 = "#" + String(st.breathCount) + " PkP=" + String(st.peakPressure_mbar, 1) +
-                " Vt=" + String(st.measuredVt_mL, 0);
-      } else {
-        line4 = "FiO2=" + String(cfg.targetFiO2 * 100, 0) + "%";
-      }
-
-      renderer.showVentilatorSettings(line1.c_str(), line2.c_str(), line3.c_str(), line4.c_str());
-    } else {
-      if (showVentilatorSettings) {
-        hostCom.println("Key2 short press - Returning to live data");
-        showVentilatorSettings = false;
-
-        renderer.clear();
-        renderer.drawLabel();
-        renderer.drawStatusField();
-        renderer.drawWiFiField();
-        renderer.drawWiFiStatusDot(wifiServer.hasClients());
-        if (wifiServer.isRunning()) {
-          renderer.drawWiFiAPIP(wifiServer.getApIpAddress(), PMIXERSSID);
-          renderer.drawWiFiPromt("Short press: disable");
-        } else {
-          renderer.drawWiFiAPIP("WiFi OFF", "No SSID");
-          renderer.drawWiFiPromt("Long press: enable");
-        }
-      }
-    }
   }
 }
 

@@ -154,8 +154,8 @@ struct InspValveConfig {
 
 struct InspValveMeasurements {
     float flow_slm;             // Measured flow through this valve
-    float supplyPressure_mbar;  // Upstream supply pressure
-    float airwayPressure_mbar;  // Downstream (patient) pressure
+    float supplyPressure_kPa;   // Upstream supply pressure (ABP2 returns kPa)
+    float airwayPressure_mbar;  // Downstream (patient) pressure (ELVH, mbar)
 };
 
 struct InspValveSetpoints {
@@ -210,7 +210,7 @@ private:
 
     /// Compute feedforward V% from desired flow and supply pressure.
     /// Uses pressure-banded flow surface if loaded, falls back to Cv table.
-    float computeFeedforward(float desiredFlow_slm, float supplyPressure_mbar,
+    float computeFeedforward(float desiredFlow_slm, float supplyPressure_kPa,
                              float downstreamPressure_mbar) const;
 };
 
@@ -302,9 +302,9 @@ struct LocalValveControllerMeasurements {
     // Inspiratory (from SFM3505 + ABP2 + ELVH)
     float airFlow_slm;              // Bus 0 flow
     float o2Flow_slm;               // Bus 1 flow (or same if shared)
-    float airSupplyPressure_mbar;   // Bus 0 ABP2
-    float o2SupplyPressure_mbar;    // Bus 1 ABP2
-    float airwayPressure_mbar;      // ELVH (Paw)
+    float airSupplyPressure_kPa;    // Bus 0 ABP2 (kPa)
+    float o2SupplyPressure_kPa;     // Bus 1 ABP2 (kPa)
+    float airwayPressure_mbar;      // ELVH (Paw, mbar)
 };
 
 struct LocalValveControllerSetpoints {

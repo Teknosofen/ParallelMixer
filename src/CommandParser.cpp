@@ -125,6 +125,12 @@ void CommandParser::printHelp() {
   Serial.println("-------------------");
   Serial.println("LE1/LE0 enable/disable local valve control (LLC)");
   Serial.println("LS print LLC status and configuration");
+  Serial.println("LF<air>[,<o2>] LLC manual flow test [SLM]");
+  Serial.println("  LF10      = 10 SLM air, 0 O2");
+  Serial.println("  LF20,5    = 20 SLM air, 5 SLM O2");
+  Serial.println("  LF        = show current test status");
+  Serial.println("LP<mbar>  set pressure safety limit (default 40)");
+  Serial.println("LX stop LLC manual flow test");
   Serial.println("CC<ch>[,maxV[,stepV[,settleMs]]]  valve characterization");
   Serial.println("  ch: 1=air, 2=O2  (exp valve not supported)");
   Serial.println("  maxV: max voltage (default 12.0 V)");

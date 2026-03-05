@@ -62,7 +62,8 @@ P-Mixer is an embedded ventilator control system providing:
 - **Pins**: GPIO43 (SDA), GPIO44 (SCL)
 - **Clock**: 400 kHz (configurable, defined as I2C0_CLOCK_FREQ)
 - **Sensors**:
-  - SFM3505 flow sensor (0x2E) - Air + O2 channels
+  - SFM3505 flow sensor (0x2E) - Air + O2 channels, **or**
+  - SFM3304 flow sensor (0x2E) - Single-use proximal sensor (auto-detected)
   - ABP2 high pressure sensor (0x28)
   - ELVH-M100D low pressure sensor (0x48)
   - MCP4725 DAC (0x60) - optional
@@ -73,7 +74,7 @@ P-Mixer is an embedded ventilator control system providing:
 - **Purpose**: Parallel sensor measurement (Bus 0 + Bus 1 = dual-channel capability)
 - **Sensors**: Same device types as Bus 0
 
-**Note**: ABP2 (0x28) and ELVH (0x48) have different addresses and can both be active on the same bus simultaneously. No compile-time switch needed.
+**Note**: SFM3505 and SFM3304 share I2C address 0x2E — only one per bus. The driver auto-detects which sensor is connected via the product identifier command (0xE102). ABP2 (0x28) and ELVH (0x48) have different addresses and can both be active on the same bus simultaneously.
 
 #### Serial Buses
 
@@ -110,7 +111,7 @@ main.cpp (Main Loop)
 Main Loop (~200 Hz)
 │
 ├── Fast Control Loop (X command, default 100 Hz / 10ms)
-│   ├── Read SFM3505 flow sensors (Bus 0 & 1)
+│   ├── Read SFM3505/SFM3304 flow sensors (Bus 0 & 1)
 │   ├── Read ELVH low pressure + temperature (Bus 0 & 1)
 │   ├── Read ABP2 pressure async (Bus 0 & 1)
 │   ├── FDO2 async check (500ms sample period = 2 Hz)
@@ -150,7 +151,8 @@ Main Loop (~200 Hz)
 **Architecture**:
 - Two instances: `sensors_bus0` (Wire) and `sensors_bus1` (Wire1)
 - Each instance independently detects and manages its sensors
-- Detection flags: `_hasSFM3505`, `_hasABP2`, `_hasELVH`
+- Detection flags: `_hasSFM3505`, `_hasSFM3304`, `_hasABP2`, `_hasELVH`
+- Auto-detection at init: sensors at 0x2E are identified via product ID query
 - All reads check detection flags before accessing hardware
 
 ### Supported Sensors
@@ -184,6 +186,47 @@ Flow_slm = (RawValue_signed - 8388608) / 25600.0
 - Dual-channel simultaneous measurement
 
 **Detection**: `hasSFM3505()`
+
+#### 1b. SFM3304 Flow Sensor (Sensirion) — Alternative
+
+**Specifications**:
+- **I2C Address**: 0x2E (same as SFM3505 — only one per bus)
+- **Channels**: 1 (air calibration)
+- **Resolution**: 16-bit (signed integer)
+- **Range**: ±250 slm
+- **Max Operating Pressure**: 1.14 bar
+- **Type**: Single-use proximal sensor with medical cone (22 mm)
+- **Update Rate**: First result after 4 ms
+
+**Data Format**:
+```
+9 bytes per read:
+[0-1] Flow (int16, signed)    [2] CRC8
+[3-4] Temperature (int16)     [5] CRC8
+[6-7] Status word (uint16)    [8] CRC8
+```
+
+**Scaling** (read from sensor via cmd 0x3661):
+```cpp
+Flow_slm    = (rawFlow - offset) / scaleFactor   // sensor-provided
+Temp_C      = rawTemperature / 200.0
+```
+
+**Commands**:
+| Command | Code | Description |
+|---------|------|-------------|
+| Start continuous measurement | 0x3603 | Same as SFM3505 |
+| Stop continuous measurement | 0x3FF9 | Same as SFM3505 |
+| Read scale/offset/unit | 0x3661 | With arg = start cmd (0x3603) |
+| Configure averaging | 0x366A | N=0: avg-until-read, N=1..128: fixed-N |
+| Read product identifier | 0xE102 | Returns 4-byte product ID + 8-byte serial |
+| Enter sleep | 0x3677 | Minimum power mode |
+
+**Auto-Detection**: At init, the driver sends command 0xE102 (read product ID). The SFM3505 does not support this command and will NAK — so a successful response identifies the sensor as SFM3304. The SFM3304 product ID starts with 0x070505xx.
+
+**Integration**: SFM3304 flow is mirrored to `sfm3505_air_flow` in SensorData so all downstream code (LLC, characterizer, WiFi dashboard) works transparently.
+
+**Detection**: `hasSFM3304()`
 
 #### 2. ABP2DSNT150PG2A3XX High Pressure Sensor (Honeywell)
 
@@ -328,8 +371,10 @@ This provides immediate visual feedback in all outputs (serial, web, display).
 **Affected Values**:
 ```cpp
 sensorData.supply_pressure = -9.9;        // ABP2
-sensorData.sfm3505_air_flow = -9.9;       // SFM3505 air
+sensorData.sfm3505_air_flow = -9.9;       // SFM3505 air (or SFM3304 flow mirror)
 sensorData.sfm3505_o2_flow = -9.9;        // SFM3505 O2
+sensorData.sfm3304_flow = -9.9;           // SFM3304 flow
+sensorData.sfm3304_temperature = -9.9;    // SFM3304 temperature
 sensorData.elvh_pressure = -9.9;          // ELVH
 sensorData.elvh_temperature = -9.9;       // ELVH
 ```
@@ -1185,8 +1230,11 @@ struct SensorData {
     float differential_pressure;   // Legacy (unused) = -9.9
     float flow;                    // Legacy (unused) = -9.9
     float supply_pressure;         // ABP2 high pressure (kPa)
-    float sfm3505_air_flow;        // SFM3505 air channel (slm)
+    float sfm3505_air_flow;        // SFM3505 air channel (slm), or SFM3304 mirror
     float sfm3505_o2_flow;         // SFM3505 O2 channel (slm)
+    float sfm3304_flow;            // SFM3304 flow (slm)
+    float sfm3304_temperature;     // SFM3304 temperature (°C)
+    uint16_t sfm3304_status_word;  // SFM3304 status word
     float elvh_pressure;           // ELVH low pressure (mbar)
     float elvh_temperature;        // ELVH temperature (°C)
 };

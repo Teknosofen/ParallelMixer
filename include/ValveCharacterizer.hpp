@@ -35,9 +35,9 @@ struct CharacterizationConfig {
 struct CharacterizationPoint {
     float voltage_V;
     float flow_slm;
-    float supplyPressure_mbar;
-    float pawPressure_mbar;
-    float cv;                   // Computed Cv = flow / sqrt(Psupply - Paw)
+    float supplyPressure_kPa;   // ABP2 returns kPa
+    float pawPressure_mbar;     // ELVH returns mbar
+    float cv;                   // Computed Cv = flow / sqrt(deltaP_kPa)
 };
 
 enum CharState {

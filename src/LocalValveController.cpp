@@ -240,7 +240,7 @@ void InspValveController::setFlowBand(uint8_t bandIndex, float refPressure,
 }
 
 float InspValveController::computeFeedforward(float desiredFlow_slm,
-                                               float supplyPressure_mbar,
+                                               float supplyPressure_kPa,
                                                float downstreamPressure_mbar) const {
     if (!_config.useFeedforward) return 0.0f;
 
@@ -249,13 +249,14 @@ float InspValveController::computeFeedforward(float desiredFlow_slm,
         // Inverse lookup on the pressure-banded flow surface:
         // Given desired flow and live supply pressure → V%
         // The V% is used directly as the feedforward output
-        return _flowSurface.inverseLookup(desiredFlow_slm, supplyPressure_mbar);
+        return _flowSurface.inverseLookup(desiredFlow_slm, supplyPressure_kPa);
     }
 
     // Fallback to legacy Cv table
     if (_cvTable.getCount() == 0) return 0.0f;
-    float deltaP = supplyPressure_mbar - downstreamPressure_mbar;
-    if (deltaP < 1.0f) deltaP = 1.0f;
+    // Convert downstream mbar to kPa for consistent units
+    float deltaP = supplyPressure_kPa - downstreamPressure_mbar / 10.0f;
+    if (deltaP < 0.1f) deltaP = 0.1f;
     float sqrtDeltaP = sqrtf(deltaP);
     float cvNeeded = desiredFlow_slm / sqrtDeltaP;
     return _cvTable.inverseLookup(cvNeeded);
@@ -265,7 +266,7 @@ float InspValveController::update(const InspValveSetpoints& sp,
                                    const InspValveMeasurements& meas,
                                    float dt) {
     // Feedforward
-    float I_ff = computeFeedforward(sp.flow_slm, meas.supplyPressure_mbar,
+    float I_ff = computeFeedforward(sp.flow_slm, meas.supplyPressure_kPa,
                                      meas.airwayPressure_mbar);
     _status.feedforwardCurrent_A = I_ff;
 
@@ -300,7 +301,7 @@ float InspValveController::update(const InspValveSetpoints& sp,
     // I_crack = baseOffset + pressCoeff * P_supply_bar
     // When setpoint is zero, output zero (no offset).
     if (sp.flow_slm > 0.01f && selectedOutput > 0.0f) {
-        float supplyPressure_bar = meas.supplyPressure_mbar / 1000.0f;
+        float supplyPressure_bar = meas.supplyPressure_kPa / 100.0f;
         float crackCurrent = _config.crackBaseOffset_A
                            + _config.crackPressCoeff_A_per_bar * supplyPressure_bar;
         selectedOutput += crackCurrent;
@@ -425,15 +426,15 @@ void LocalValveController::setDefaults() {
 
     // --- Air inspiratory valve ---
     config.airValve.flowPI = {
-        .kp = 0.05f,           // A per slm error
-        .ki = 0.5f,            // A per slm*s error
+        .kp = 0.01f,           // A per slm error  (was 0.05)
+        .ki = 0.1f,            // A per slm*s error (was 0.5)
         .outputMin = 0.0f,
         .outputMax = 2.0f,     // Max correction current
         .trackingRate = 0.3f   // Anti-windup tracking
     };
     config.airValve.pressurePI = {
-        .kp = 0.1f,            // A per mbar error
-        .ki = 1.0f,            // A per mbar*s error
+        .kp = 0.02f,           // A per mbar error  (was 0.1)
+        .ki = 0.2f,            // A per mbar*s error (was 1.0)
         .outputMin = 0.0f,
         .outputMax = 2.0f,
         .trackingRate = 0.3f
@@ -449,8 +450,8 @@ void LocalValveController::setDefaults() {
 
     // --- Expiratory valve ---
     config.expValve.pressurePI = {
-        .kp = 0.05f,           // A per mbar error
-        .ki = 0.5f,            // A per mbar*s error
+        .kp = 0.01f,           // A per mbar error  (was 0.05)
+        .ki = 0.1f,            // A per mbar*s error (was 0.5)
         .outputMin = 0.0f,
         .outputMax = 2.0f,
         .trackingRate = 0.0f   // No tracking needed (single PI)
@@ -602,7 +603,7 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
 
     InspValveMeasurements airMeas;
     airMeas.flow_slm = meas.airFlow_slm;
-    airMeas.supplyPressure_mbar = meas.airSupplyPressure_mbar;
+    airMeas.supplyPressure_kPa = meas.airSupplyPressure_kPa;
     airMeas.airwayPressure_mbar = meas.airwayPressure_mbar;
 
     float airCurrent = _airValve.update(airSP, airMeas, dt);
@@ -615,7 +616,7 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
 
     InspValveMeasurements o2Meas;
     o2Meas.flow_slm = meas.o2Flow_slm;
-    o2Meas.supplyPressure_mbar = meas.o2SupplyPressure_mbar;
+    o2Meas.supplyPressure_kPa = meas.o2SupplyPressure_kPa;
     o2Meas.airwayPressure_mbar = meas.airwayPressure_mbar;
 
     float o2Current = _o2Valve.update(o2SP, o2Meas, dt);

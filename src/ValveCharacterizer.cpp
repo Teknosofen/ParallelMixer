@@ -109,10 +109,11 @@ bool ValveCharacterizer::update(const SensorData& bus0, const SensorData& bus1,
                 float avgPressure = _sumPressure / _sampleCount;
                 float avgPaw = _sumPaw / _sampleCount;
 
-                // Compute Cv = Q / sqrt(Psupply - Paw)
-                float deltaP = avgPressure - avgPaw;
+                // Compute Cv = Q / sqrt(deltaP_kPa)
+                // avgPressure is kPa (ABP2), avgPaw is mbar (ELVH) — convert to kPa
+                float deltaP = avgPressure - avgPaw / 10.0f;
                 float cv = 0.0f;
-                if (deltaP > 1.0f && avgFlow > 0.001f) {
+                if (deltaP > 0.1f && avgFlow > 0.001f) {
                     cv = avgFlow / sqrtf(deltaP);
                 }
 
@@ -120,7 +121,7 @@ bool ValveCharacterizer::update(const SensorData& bus0, const SensorData& bus1,
                 CharacterizationPoint pt;
                 pt.voltage_V = _currentVoltage;
                 pt.flow_slm = avgFlow;
-                pt.supplyPressure_mbar = avgPressure;
+                pt.supplyPressure_kPa = avgPressure;
                 pt.pawPressure_mbar = avgPaw;
                 pt.cv = cv;
 
@@ -208,7 +209,7 @@ void ValveCharacterizer::printHeader() {
 
 void ValveCharacterizer::printDataRow(const CharacterizationPoint& pt) {
     Serial.printf("%.3f,\t%.3f,\t\t%.1f,\t\t%.2f\n",
-                  pt.voltage_V, pt.flow_slm, pt.supplyPressure_mbar,
+                  pt.voltage_V, pt.flow_slm, pt.supplyPressure_kPa,
                   pt.pawPressure_mbar);
 }
 
@@ -221,7 +222,7 @@ void ValveCharacterizer::printCvTable() {
     // Compute average supply pressure for this sweep
     float avgPsupply = 0;
     for (uint16_t i = 0; i < _pointCount; i++) {
-        avgPsupply += _points[i].supplyPressure_mbar;
+        avgPsupply += _points[i].supplyPressure_kPa;
     }
     avgPsupply /= _pointCount;
 
@@ -229,7 +230,7 @@ void ValveCharacterizer::printCvTable() {
     Serial.println("// ============================================================");
     Serial.printf( "// %s valve flow table from characterization\n", valveName);
     Serial.printf( "// Set Psupply ≈ %.0f kPa (%.2f bar) — actual varies with flow\n",
-                   _points[0].supplyPressure_mbar, _points[0].supplyPressure_mbar / 100.0f);
+                   _points[0].supplyPressure_kPa, _points[0].supplyPressure_kPa / 100.0f);
     Serial.printf( "// Avg Psupply ≈ %.0f kPa (%.2f bar)\n",
                    avgPsupply, avgPsupply / 100.0f);
     Serial.printf( "// MUX channel %d, %d raw points\n", _config.muxChannel, _pointCount);
@@ -237,20 +238,20 @@ void ValveCharacterizer::printCvTable() {
     Serial.println("// NOTE: Reduce to ≤16 points before loading into PressureBandedTable");
     Serial.println("// ============================================================");
     Serial.printf( "static const LookupPoint %sFlowBand_P%.0f[] = {\n",
-                   varPrefix, _points[0].supplyPressure_mbar);
+                   varPrefix, _points[0].supplyPressure_kPa);
 
     for (uint16_t i = 0; i < _pointCount; i++) {
         Serial.printf("    {%.3ff, %.3ff}%s  // Psupply=%.0f kPa\n",
                       _points[i].voltage_V,
                       _points[i].flow_slm,
                       (i < _pointCount - 1) ? "," : " ",
-                      _points[i].supplyPressure_mbar);
+                      _points[i].supplyPressure_kPa);
     }
 
     Serial.println("};");
     Serial.printf( "// Table has %d entries.\n", _pointCount);
     Serial.printf( "// Load with: _valve.setFlowBand(<bandIndex>, %.1ff, %sFlowBand_P%.0f, %d);\n",
-                   _points[0].supplyPressure_mbar, varPrefix,
-                   _points[0].supplyPressure_mbar, _pointCount);
+                   _points[0].supplyPressure_kPa, varPrefix,
+                   _points[0].supplyPressure_kPa, _pointCount);
     Serial.println();
 }

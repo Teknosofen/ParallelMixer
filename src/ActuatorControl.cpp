@@ -19,9 +19,9 @@ ActuatorControl::ActuatorControl()
     _pwmResolutionBits(8),
     _pwmMaxDuty(255) {
 
-  // Default PID configuration
-  _pid_config.p_gain = 1.0;
-  _pid_config.i_gain = 1.0;
+  // Default PID configuration — conservative for initial testing
+  _pid_config.p_gain = 0.2;
+  _pid_config.i_gain = 0.05;
   _pid_config.d_gain = 0.0;
   _pid_config.valve_offset = 0.0;
 
