@@ -23,25 +23,34 @@ bool SensorReader::initialize() {
   _hasELVH = false;
 
   // ============================================================================
-  // Detect flow sensor at 0x2E — assume SFM3505 (SFM3503 compatible)
+  // SFM3505 Flow Sensor at 0x2E
+  // NOTE: The I2C bus scan in main.cpp sends empty writes to 0x2E which can
+  // corrupt the SFM3505 I2C state machine. We do a General Call Reset first
+  // to recover, then skip the detection scan and go straight to start command.
   // ============================================================================
-  Serial.printf("[%s] Checking for SFM3505 at address 0x%02X...\n", _name, I2Cadr_SFM3505);
-  _wire->beginTransmission(I2Cadr_SFM3505);
-  byte error = _wire->endTransmission();
 
-  if (error == 0) {
-    Serial.printf("[%s] ✅ SFM3505 detected\n", _name);
+  // General Call Reset — resets all Sensirion sensors on this bus
+  Serial.printf("[%s] Sending I2C General Call Reset (0x00, 0x06)...\n", _name);
+  _wire->beginTransmission(0x00);  // General Call address
+  _wire->write(0x06);              // Reset command
+  _wire->endTransmission();
+  delay(100);  // SFM3505 needs up to 100ms to boot after reset
+
+  // Now start continuous measurement directly — no detection scan needed
+  Serial.printf("[%s] Starting SFM3505 continuous measurement at 0x%02X...\n", _name, I2Cadr_SFM3505);
+  if (startSFM3505Measurement()) {
+    Serial.printf("[%s] ✅ SFM3505 detected and measurement started\n", _name);
     _hasSFM3505 = true;
-
-    delay(50);
-    Serial.printf("[%s] Starting SFM3505 continuous measurement...\n", _name);
-    if (startSFM3505Measurement()) {
-      Serial.printf("[%s] ✅ SFM3505 measurement started\n", _name);
-    } else {
-      Serial.printf("[%s] ⚠️ SFM3505 start command failed (may already be running)\n", _name);
-    }
   } else {
-    Serial.printf("[%s] ⚠️ No flow sensor detected at 0x%02X\n", _name);
+    // Retry once — sensor may need more time after reset
+    delay(50);
+    Serial.printf("[%s] Retrying SFM3505 start...\n", _name);
+    if (startSFM3505Measurement()) {
+      Serial.printf("[%s] ✅ SFM3505 measurement started (retry)\n", _name);
+      _hasSFM3505 = true;
+    } else {
+      Serial.printf("[%s] ⚠️ No SFM3505 at 0x%02X (start command failed)\n", _name, I2Cadr_SFM3505);
+    }
   }
 
   // ============================================================================
@@ -492,7 +501,7 @@ bool SensorReader::readELVHPressureTemp(float& pressure_mbar, float& temperature
 // ============================================================================
 
 bool SensorReader::readSFM3505AirFlow(float& airFlow) {
-  uint8_t buffer[6];  // Need 6 bytes even though we only use first 3
+  uint8_t buffer[6];
   
   if (!readSFM3505Raw(buffer, 6)) {
     return false;
@@ -619,16 +628,16 @@ bool SensorReader::readSFM3505Raw(uint8_t* buffer, uint8_t length) {
     rawData[i] = _wire->read();
   }
 
-  // Debug: Print raw data received (only first time or on error)
-  // static bool firstRead = true;
-  // if (firstRead) {
-  //   Serial.printf("[%s] SFM3505 raw data (first read): ", _name);
-  //   for (uint8_t i = 0; i < 9; i++) {
-  //     Serial.printf("0x%02X ", rawData[i]);
-  //   }
-  //   Serial.println();
-  //   firstRead = false;
-  // }
+  // Debug: Print raw data received (first 5 reads)
+  static uint8_t rawDebugCount = 0;
+  if (rawDebugCount < 5) {
+    Serial.printf("[%s] SFM3505 raw 9 bytes: ", _name);
+    for (uint8_t i = 0; i < 9; i++) {
+      Serial.printf("0x%02X ", rawData[i]);
+    }
+    Serial.println();
+    rawDebugCount++;
+  }
 
 #if SFM3505_ENABLE_CRC_CHECK
   // Validate CRC1 (covers Air Flow bytes [23:16] and [15:8])
@@ -672,17 +681,17 @@ bool SensorReader::readSFM3505Raw(uint8_t* buffer, uint8_t length) {
   buffer[5] = rawData[7];  // O2 [7:0]
 
   // Debug: Show extracted values
-  // static uint8_t debugCount = 0;
-  // if (debugCount < 3) {  // Only show first 3 reads
-  //   uint32_t airRaw = ((uint32_t)buffer[0] << 16) | ((uint32_t)buffer[1] << 8) | buffer[2];
-  //   uint32_t o2Raw = ((uint32_t)buffer[3] << 16) | ((uint32_t)buffer[4] << 8) | buffer[5];
-  //   float airFlow = scaleSFM3505Flow(airRaw);
-  //   float o2Flow = scaleSFM3505Flow(o2Raw);
-  //
-  //   Serial.printf("[%s] Air: raw=0x%06X, flow=%.2f slm | O2: raw=0x%06X, flow=%.2f slm\n",
-  //                 _name, airRaw, airFlow, o2Raw, o2Flow);
-  //   debugCount++;
-  // }
+  static uint8_t debugCount = 0;
+  if (debugCount < 5) {
+    uint32_t airRaw = ((uint32_t)buffer[0] << 16) | ((uint32_t)buffer[1] << 8) | buffer[2];
+    uint32_t o2Raw = ((uint32_t)buffer[3] << 16) | ((uint32_t)buffer[4] << 8) | buffer[5];
+    float airFlow = scaleSFM3505Flow(airRaw);
+    float o2Flow = scaleSFM3505Flow(o2Raw);
+
+    Serial.printf("[%s] Air: raw=0x%06X, flow=%.2f slm | O2: raw=0x%06X, flow=%.2f slm\n",
+                  _name, airRaw, airFlow, o2Raw, o2Flow);
+    debugCount++;
+  }
 
   return true;
 }

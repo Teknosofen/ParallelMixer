@@ -66,7 +66,7 @@ uint32_t control_past_time;  // For control system execution timing
 static bool  llcManualTestActive = false;
 static float llcManualAirFlow_slm = 0.0f;
 static float llcManualO2Flow_slm  = 0.0f;
-static float llcManualMaxPressure_mbar = 40.0f;  // Safety limit
+static float llcManualMaxPressure_mbar = 9999.0f;  // No pressure limit in pure flow test (LP to override)
 
 void setup() {
   // Initialize USB Serial - use default USB CDC
@@ -330,20 +330,61 @@ void updateVentilatorControl(uint32_t now) {
 
     float dt = sysConfig.control_interval / 1000000.0f;
     localValveCtrl.update(llcSP, llcMeas, dt);
+
+    // Debug: print LLC feedback every ~1 second (100 cycles at 100Hz)
+    static uint16_t lfDebugCounter = 0;
+    if (++lfDebugCounter >= 100) {
+      lfDebugCounter = 0;
+      auto airSt = localValveCtrl.getAirValveStatus();
+      auto o2St  = localValveCtrl.getO2ValveStatus();
+      Serial.printf("[LF] SP: air=%.1f o2=%.1f | Meas: air=%.2f o2=%.2f | Psup=%.0f/%.0f kPa | dt=%.4f\n",
+                    llcSP.airFlow_slm, llcSP.o2Flow_slm,
+                    llcMeas.airFlow_slm, llcMeas.o2Flow_slm,
+                    llcMeas.airSupplyPressure_kPa, llcMeas.o2SupplyPressure_kPa, dt);
+      Serial.printf("     Air: FF=%.2f PI=%.2f Out=%.2f V%% | O2: FF=%.2f PI=%.2f Out=%.2f V%%\n",
+                    airSt.feedforwardCurrent_A, airSt.flowPIOutput_A, airSt.outputCurrent_A,
+                    o2St.feedforwardCurrent_A, o2St.flowPIOutput_A, o2St.outputCurrent_A);
+    }
     return;
   }
 
   // --- Normal ventilator mode ---
   if (!ventilator.isRunning()) return;
 
+  // Auto-enable LLC when ventilator runs (motor drivers need V% commands from LLC)
+  if (!localValveCtrl.isEnabled()) {
+    localValveCtrl.setEnabled(true);
+    localValveCtrl.reset();
+    Serial.println("[VENT] LLC auto-enabled for ventilator mode");
+  }
+
   VentilatorMeasurements ventMeas;
   ventMeas.airwayPressure_mbar = getELVH_Pressure();
-  ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow;
+  ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow + sensorData_bus1.sfm3505_air_flow;
   ventMeas.expFlow_slm = 0;  // TODO: Add expiratory flow sensor if available
   ventMeas.deliveredO2_percent = fdo2Initialized ?
     fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : 21.0f;
 
+  // Track state transitions for debug output
+  static VentilatorState lastState = VENT_OFF;
+  VentilatorState prevState = ventilator.getState();
+
   ventilator.update(ventMeas, now);
+
+  VentilatorState curState = ventilator.getState();
+  if (curState != lastState) {
+    VentilatorOutputs dbgOut = ventilator.getOutputs();
+    Serial.printf("[VENT] %s -> %s  AirF=%.1f O2F=%.1f ExpCl=%d ExpP=%.1f\n",
+                  (lastState == VENT_OFF ? "OFF" :
+                   lastState == VENT_INSP_PHASE1 ? "INSP1" :
+                   lastState == VENT_INSP_PHASE2 ? "INSP2" :
+                   lastState == VENT_INSP_PAUSE ? "PAUSE" :
+                   lastState == VENT_EXP_NON_TRIG ? "EXP" : "SYNC"),
+                  ventilator.getStateString(),
+                  dbgOut.airValveFlow_slm, dbgOut.o2ValveFlow_slm,
+                  dbgOut.expValveClosed, dbgOut.expValveSetpoint);
+    lastState = curState;
+  }
 
   VentilatorOutputs ventOut = ventilator.getOutputs();
   VentilatorConfig  ventCfg = ventilator.getConfig();
@@ -373,6 +414,7 @@ void updateVentilatorControl(uint32_t now) {
 /** Execute actuator control for all MUX channels (when ventilator not running). */
 void executeActuatorControl() {
   if (ventilator.isRunning()) return;
+  if (llcManualTestActive) return;  // LLC manual test owns the valve outputs
 
   for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
     actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
@@ -467,9 +509,9 @@ void processSerialCommands() {
         llcManualO2Flow_slm = 0.0f;
         localValveCtrl.reset();
         // Send zero current to all valve channels to ensure safe stop
-        muxRouter.sendSetCurrent(1, 0.0f);  // Air
-        muxRouter.sendSetCurrent(2, 0.0f);  // O2
-        muxRouter.sendSetCurrent(3, 0.0f);  // Exp
+        muxRouter.sendCommand(1, 'V', 0.0f);  // Air
+        muxRouter.sendCommand(2, 'V', 0.0f);  // O2
+        muxRouter.sendCommand(3, 'V', 0.0f);  // Exp
         Serial.println("[LX] Manual test stopped, valves zeroed");
       } else {
         Serial.println("[LX] No manual test running");

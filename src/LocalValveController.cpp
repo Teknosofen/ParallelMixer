@@ -426,23 +426,23 @@ void LocalValveController::setDefaults() {
 
     // --- Air inspiratory valve ---
     config.airValve.flowPI = {
-        .kp = 0.01f,           // A per slm error  (was 0.05)
-        .ki = 0.1f,            // A per slm*s error (was 0.5)
-        .outputMin = 0.0f,
-        .outputMax = 2.0f,     // Max correction current
+        .kp = 0.01f,           // V% per slm error
+        .ki = 0.1f,            // V% per slm*s error
+        .outputMin = -14.0f,   // Allow negative correction to counteract feedforward
+        .outputMax = 14.0f,    // Max correction V% (valve saturates ~10-14%)
         .trackingRate = 0.3f   // Anti-windup tracking
     };
     config.airValve.pressurePI = {
-        .kp = 0.02f,           // A per mbar error  (was 0.1)
-        .ki = 0.2f,            // A per mbar*s error (was 1.0)
-        .outputMin = 0.0f,
-        .outputMax = 2.0f,
+        .kp = 0.02f,           // V% per mbar error
+        .ki = 0.2f,            // V% per mbar*s error
+        .outputMin = 0.0f,     // Pressure PI only limits (output is a ceiling)
+        .outputMax = 14.0f,
         .trackingRate = 0.3f
     };
-    config.airValve.maxCurrent_A = 2.0f;
+    config.airValve.maxCurrent_A = 14.0f;   // Max V% output
     config.airValve.minCurrent_A = 0.0f;
-    config.airValve.crackBaseOffset_A = 0.10f;        // PLACEHOLDER — cracking current at 0 bar supply
-    config.airValve.crackPressCoeff_A_per_bar = 0.05f; // PLACEHOLDER — additional A per bar supply
+    config.airValve.crackBaseOffset_A = 0.0f;         // Handled by feedforward table
+    config.airValve.crackPressCoeff_A_per_bar = 0.0f; // Handled by feedforward table
     config.airValve.useFeedforward = true;
 
     // --- O2 inspiratory valve (same structure, possibly different gains) ---
@@ -450,15 +450,15 @@ void LocalValveController::setDefaults() {
 
     // --- Expiratory valve ---
     config.expValve.pressurePI = {
-        .kp = 0.01f,           // A per mbar error  (was 0.05)
-        .ki = 0.1f,            // A per mbar*s error (was 0.5)
+        .kp = 0.01f,           // V% per mbar error
+        .ki = 0.1f,            // V% per mbar*s error
         .outputMin = 0.0f,
-        .outputMax = 2.0f,
+        .outputMax = 14.0f,
         .trackingRate = 0.0f   // No tracking needed (single PI)
     };
-    config.expValve.maxCurrent_A = 2.0f;
+    config.expValve.maxCurrent_A = 14.0f;   // Max V% output
     config.expValve.minCurrent_A = 0.0f;
-    config.expValve.crackBaseOffset_A = 0.10f;  // PLACEHOLDER — measure cracking current
+    config.expValve.crackBaseOffset_A = 0.0f;   // No cracking offset in V% mode
     config.expValve.useFeedforward = true;
 
     // MUX channel assignments
@@ -636,6 +636,7 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
 
 void LocalValveController::sendValveCurrent(uint8_t channel, float current_A) {
     if (_muxRouter) {
-        _muxRouter->sendSetCurrent(channel, current_A);
+        // Motor drivers accept V% commands, not current — send as V%
+        _muxRouter->sendCommand(channel, 'V', current_A);
     }
 }
