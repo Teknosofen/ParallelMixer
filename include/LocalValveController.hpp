@@ -5,6 +5,7 @@
 
 // Forward declarations
 class SerialMuxRouter;
+class ActuatorControl;
 
 // ============================================================================
 // Piecewise-Linear Lookup Table (1D)
@@ -277,22 +278,97 @@ private:
 
 
 // ============================================================================
+// Blower Controller (GPIO21 PWM via ActuatorControl)
+// ============================================================================
+// Flow control with pressure limiting, same override pattern as InspValveController.
+// Uses PressureBandedTable with Paw (mbar) as the condition variable instead of
+// Psupply (kPa).  Outputs PWM% (0–100) via ActuatorControl::outputToValve().
+//
+// Feedforward: inverseLookup(desiredFlow, measuredPaw) → PWM%
+// Flow PI:     error = flowSetpoint − flowMeasured → PWM% correction
+// Pressure PI: error = pressureLimit − measuredPaw → PWM% ceiling
+// Final PWM% = min(FF + flowPI, pressurePI)
+
+struct BlowerConfig {
+    PIConfig flowPI;
+    PIConfig pressurePI;
+    float    maxPwmPercent;      // Max PWM output (100.0)
+    float    minPwmPercent;      // Min PWM output (0.0)
+    bool     useFeedforward;     // Enable 2D flow surface feedforward
+};
+
+struct BlowerMeasurements {
+    float flow_slm;              // Measured flow downstream of blower (Bus 0)
+    float airwayPressure_mbar;   // Counter pressure (ELVH Paw, mbar)
+};
+
+struct BlowerSetpoints {
+    float flow_slm;              // Desired flow
+    float pressureLimit_mbar;    // Max allowed airway pressure
+};
+
+struct BlowerStatus {
+    float outputPwmPercent;
+    float feedforwardPwmPercent;
+    float flowPIOutput;
+    float pressurePIOutput;
+    bool  pressureLimiting;
+    bool  active;
+};
+
+class BlowerController {
+public:
+    BlowerController();
+
+    void begin(const BlowerConfig& config);
+    void reset();
+
+    /// Set a pressure-banded flow surface for feedforward.
+    /// bandIndex 0..3, loaded in ascending Paw order.
+    void setFlowBand(uint8_t bandIndex, float refPaw_mbar,
+                     const LookupPoint* points, uint8_t count);
+
+    const PressureBandedTable& getFlowSurface() const { return _flowSurface; }
+
+    /// Main update.  dt in seconds.
+    /// Returns PWM% command (0–100).
+    float update(const BlowerSetpoints& sp, const BlowerMeasurements& meas, float dt);
+
+    BlowerStatus getStatus() const { return _status; }
+
+    PIController& flowPI() { return _flowPI; }
+    PIController& pressurePI() { return _pressurePI; }
+
+private:
+    BlowerConfig       _config;
+    BlowerStatus       _status;
+    PIController       _flowPI;
+    PIController       _pressurePI;
+    PressureBandedTable _flowSurface;   // PWM%(Flow, Paw) for 2D feedforward
+
+    float computeFeedforward(float desiredFlow_slm, float paw_mbar) const;
+};
+
+
+// ============================================================================
 // Local Valve Controller — Top-Level Coordinator
 // ============================================================================
-// Manages all 3 valves.  Sits between VentilatorController (HLC) outputs
-// and SerialMuxRouter (sends current commands to valve drivers).
+// Manages all 3 valves + blower.  Sits between VentilatorController (HLC)
+// outputs and SerialMuxRouter / ActuatorControl hardware outputs.
 //
 // The VentilatorController outputs:
 //   - airValveFlow_slm, o2ValveFlow_slm (inspiratory flow setpoints)
 //   - expValveSetpoint (pressure or position), expValveClosed, expValveAsPressure
 //   - maxPressure_mbar (airway pressure limit)
+//   - blowerFlow_slm (blower flow setpoint)
 //
-// This controller converts those to valve currents.
+// This controller converts those to valve currents / PWM%.
 
 struct LocalValveControllerConfig {
     InspValveConfig airValve;
     InspValveConfig o2Valve;
     ExpValveConfig  expValve;
+    BlowerConfig    blower;
     uint8_t airMuxChannel;      // MUX address for air valve (default MUX_AIR_VALVE=1)
     uint8_t o2MuxChannel;       // MUX address for O2 valve  (default MUX_O2_VALVE=2)
     uint8_t expMuxChannel;      // MUX address for exp valve (default MUX_EXP_VALVE=3)
@@ -305,6 +381,7 @@ struct LocalValveControllerMeasurements {
     float airSupplyPressure_kPa;    // Bus 0 ABP2 (kPa)
     float o2SupplyPressure_kPa;     // Bus 1 ABP2 (kPa)
     float airwayPressure_mbar;      // ELVH (Paw, mbar)
+    float blowerFlow_slm;           // Flow downstream of blower (Bus 0)
 };
 
 struct LocalValveControllerSetpoints {
@@ -317,13 +394,23 @@ struct LocalValveControllerSetpoints {
     float expPressure_mbar;     // PEEP or pop-off setpoint
     bool  expValveClosed;       // Force exp valve closed
     bool  expValveActive;       // Enable exp valve pressure control
+
+    // Blower
+    float blowerFlow_slm;       // Desired blower flow (0 = off)
+    float blowerPressureLimit_mbar;  // Max allowed airway pressure for blower
+    bool  blowerActive;         // Enable blower flow control
+
+    // Channel bypass (characterizer owns these outputs)
+    uint8_t skipMuxChannel = 0;   // MUX channel to NOT send V% to (0 = none)
+    bool    skipBlower     = false; // Don't send blower PWM
 };
 
 class LocalValveController {
 public:
     LocalValveController();
 
-    void begin(SerialMuxRouter* muxRouter, const LocalValveControllerConfig& config);
+    void begin(SerialMuxRouter* muxRouter, ActuatorControl* blowerActuator,
+               const LocalValveControllerConfig& config);
 
     /// Set default placeholder configs (for initial commissioning)
     void setDefaults();
@@ -347,19 +434,23 @@ public:
     InspValveStatus getAirValveStatus() const { return _airValve.getStatus(); }
     InspValveStatus getO2ValveStatus() const  { return _o2Valve.getStatus(); }
     ExpValveStatus  getExpValveStatus() const  { return _expValve.getStatus(); }
+    BlowerStatus    getBlowerStatus() const   { return _blower.getStatus(); }
 
     // Direct access for tuning
     InspValveController& airValve() { return _airValve; }
     InspValveController& o2Valve()  { return _o2Valve; }
     ExpValveController&  expValve() { return _expValve; }
+    BlowerController&    blower()   { return _blower; }
 
 private:
     SerialMuxRouter*   _muxRouter;
+    ActuatorControl*   _blowerActuator;   // For GPIO21 direct PWM output
     bool               _enabled;
 
     InspValveController _airValve;
     InspValveController _o2Valve;
     ExpValveController  _expValve;
+    BlowerController    _blower;
 
     uint8_t _airMuxChannel;
     uint8_t _o2MuxChannel;
@@ -367,6 +458,9 @@ private:
 
     /// Send current command to a valve via MUX
     void sendValveCurrent(uint8_t channel, float current_A);
+
+    /// Send PWM% command to blower via ActuatorControl
+    void sendBlowerPwm(float pwmPercent);
 };
 
 #endif // LOCAL_VALVE_CONTROLLER_HPP

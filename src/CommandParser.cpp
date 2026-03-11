@@ -129,15 +129,22 @@ void CommandParser::printHelp() {
   Serial.println("  LF10      = 10 SLM air, 0 O2");
   Serial.println("  LF20,5    = 20 SLM air, 5 SLM O2");
   Serial.println("  LF        = show current test status");
+  Serial.println("LB<flow>[,<Plim>] LLC blower flow test [SLM]");
+  Serial.println("  LB50      = 50 SLM blower, default Plim 40 mbar");
+  Serial.println("  LB100,30  = 100 SLM blower, Plim 30 mbar");
   Serial.println("LP<mbar>  set pressure safety limit (default 40)");
-  Serial.println("LX stop LLC manual flow test");
-  Serial.println("CC<ch>[,maxV[,stepV[,settleMs]]]  valve characterization");
-  Serial.println("  ch: 1=air, 2=O2  (exp valve not supported)");
-  Serial.println("  maxV: max voltage (default 12.0 V)");
-  Serial.println("  stepV: voltage step (default 0.1 V)");
+  Serial.println("LX stop LLC manual test (valves + blower)");
+  Serial.println("CC<ch>[,max[,step[,settleMs]]]  actuator characterization");
+  Serial.println("  ch: 1=air, 2=O2, 3=exp, 4=blower(PWM)");
+  Serial.println("  max: max control signal %  (default: 12 for valves, 100 for blower)");
+  Serial.println("  step: increment per step % (default: 0.1 for valves, 1 for blower)");
   Serial.println("  settleMs: settle time per step (default 200 ms)");
-  Serial.println("  Example: CC1         (air valve, defaults)");
-  Serial.println("  Example: CC2,10,0.2,300  (O2, 10V max, 0.2V step, 300ms)");
+  Serial.println("  Insp valves: sweeps V%%, measures flow at Psupply");
+  Serial.println("  Blower: sweeps PWM%%, measures flow at counter pressure");
+  Serial.println("  Exp valve: sweeps V%%, measures Paw at flow (set flow with LF)");
+  Serial.println("  Example: CC1           (air valve, defaults)");
+  Serial.println("  Example: CC4,100,2,300 (blower PWM 0-100%%, step 2%%, 300ms)");
+  Serial.println("  Example: CC3,12,0.1    (exp valve V%%, with flow set via LF)");
   Serial.println("CX abort valve characterization");
 }
 

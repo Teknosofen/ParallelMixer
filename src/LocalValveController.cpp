@@ -1,5 +1,6 @@
 #include "LocalValveController.hpp"
 #include "SerialMuxRouter.hpp"
+#include "ActuatorControl.hpp"
 
 // ============================================================================
 // PiecewiseLinearTable
@@ -394,11 +395,91 @@ float ExpValveController::forceOpen() {
 
 
 // ============================================================================
+// BlowerController
+// ============================================================================
+
+BlowerController::BlowerController() {
+    memset(&_config, 0, sizeof(_config));
+    memset(&_status, 0, sizeof(_status));
+}
+
+void BlowerController::begin(const BlowerConfig& config) {
+    _config = config;
+    _flowPI.configure(config.flowPI);
+    _pressurePI.configure(config.pressurePI);
+    reset();
+}
+
+void BlowerController::reset() {
+    _flowPI.reset();
+    _pressurePI.reset();
+    memset(&_status, 0, sizeof(_status));
+}
+
+void BlowerController::setFlowBand(uint8_t bandIndex, float refPaw_mbar,
+                                    const LookupPoint* points, uint8_t count) {
+    _flowSurface.loadBand(bandIndex, refPaw_mbar, points, count);
+}
+
+float BlowerController::computeFeedforward(float desiredFlow_slm, float paw_mbar) const {
+    if (!_config.useFeedforward) return 0.0f;
+    if (_flowSurface.getBandCount() == 0) return 0.0f;
+
+    // Inverse lookup on the pressure-banded flow surface:
+    // Given desired flow and live Paw → PWM%
+    return _flowSurface.inverseLookup(desiredFlow_slm, paw_mbar);
+}
+
+float BlowerController::update(const BlowerSetpoints& sp,
+                                const BlowerMeasurements& meas,
+                                float dt) {
+    // Feedforward: desired flow + live Paw → PWM%
+    float pwm_ff = computeFeedforward(sp.flow_slm, meas.airwayPressure_mbar);
+    _status.feedforwardPwmPercent = pwm_ff;
+
+    // Flow PI: wants to achieve the flow setpoint
+    // Output is a PWM% correction added to feedforward
+    float flowOutput = _flowPI.update(sp.flow_slm, meas.flow_slm, dt) + pwm_ff;
+    _status.flowPIOutput = flowOutput;
+
+    // Pressure PI: limits PWM% to prevent exceeding pressure limit
+    float pressureOutput = _pressurePI.update(sp.pressureLimit_mbar,
+                                               meas.airwayPressure_mbar, dt);
+    _status.pressurePIOutput = pressureOutput;
+
+    // Override control: take the minimum (most restrictive)
+    float selectedOutput;
+    bool pressureLimiting;
+    if (pressureOutput < flowOutput) {
+        selectedOutput = pressureOutput;
+        pressureLimiting = true;
+    } else {
+        selectedOutput = flowOutput;
+        pressureLimiting = false;
+    }
+
+    // Anti-windup tracking
+    _flowPI.trackOutput(selectedOutput, !pressureLimiting);
+    _pressurePI.trackOutput(selectedOutput, pressureLimiting);
+
+    // Clamp to hardware limits
+    selectedOutput = constrain(selectedOutput, _config.minPwmPercent, _config.maxPwmPercent);
+
+    _status.outputPwmPercent = selectedOutput;
+    _status.pressureLimiting = pressureLimiting;
+    _status.active = (sp.flow_slm > 0.01f);
+
+    return selectedOutput;
+}
+
+
+// ============================================================================
 // LocalValveController — Top-Level Coordinator
 // ============================================================================
 
 LocalValveController::LocalValveController()
     : _muxRouter(nullptr),
+      _blowerActuator(nullptr),
       _enabled(false),
       _airMuxChannel(1),
       _o2MuxChannel(2),
@@ -406,8 +487,10 @@ LocalValveController::LocalValveController()
 }
 
 void LocalValveController::begin(SerialMuxRouter* muxRouter,
+                                  ActuatorControl* blowerActuator,
                                   const LocalValveControllerConfig& config) {
     _muxRouter = muxRouter;
+    _blowerActuator = blowerActuator;
     _airMuxChannel = config.airMuxChannel;
     _o2MuxChannel = config.o2MuxChannel;
     _expMuxChannel = config.expMuxChannel;
@@ -415,6 +498,7 @@ void LocalValveController::begin(SerialMuxRouter* muxRouter,
     _airValve.begin(config.airValve);
     _o2Valve.begin(config.o2Valve);
     _expValve.begin(config.expValve);
+    _blower.begin(config.blower);
 }
 
 void LocalValveController::setDefaults() {
@@ -461,95 +545,101 @@ void LocalValveController::setDefaults() {
     config.expValve.crackBaseOffset_A = 0.0f;   // No cracking offset in V% mode
     config.expValve.useFeedforward = true;
 
+    // --- Blower (GPIO21 PWM) ---
+    config.blower.flowPI = {
+        .kp = 0.05f,           // PWM% per slm error
+        .ki = 0.5f,            // PWM% per slm*s error
+        .outputMin = -100.0f,  // Allow negative correction to counteract feedforward
+        .outputMax = 100.0f,   // Max correction PWM%
+        .trackingRate = 0.3f   // Anti-windup tracking
+    };
+    config.blower.pressurePI = {
+        .kp = 1.0f,            // PWM% per mbar error
+        .ki = 5.0f,            // PWM% per mbar*s error
+        .outputMin = 0.0f,     // Pressure PI only limits (ceiling)
+        .outputMax = 100.0f,
+        .trackingRate = 0.3f
+    };
+    config.blower.maxPwmPercent = 100.0f;
+    config.blower.minPwmPercent = 0.0f;
+    config.blower.useFeedforward = true;
+
     // MUX channel assignments
     config.airMuxChannel = 1;   // MUX_AIR_VALVE
     config.o2MuxChannel = 2;    // MUX_O2_VALVE
     config.expMuxChannel = 3;   // MUX_EXP_VALVE
 
-    begin(_muxRouter, config);
+    begin(_muxRouter, _blowerActuator, config);
 
     // ======================================================================
     // PRESSURE-BANDED FLOW TABLES (2D flow surface)
     // ======================================================================
     // Each band is a V% → Flow (slm) table at a reference supply pressure.
-    // Measured from CC1 sweeps at ~3, 4.5, and 6 bar set pressures.
+    // Measured from CC1 sweeps at ~2.6, 4, and 5.5 bar set pressures.
+    // Normalized for pressure droop (--normalize).
     // The feedforward does inverse lookup: desired flow + live Psupply → V%.
     //
-    // Reduced to ≤16 points per band: dead zone → cracking → active → saturation.
+    // Reduced to ≤12 points per band: dead zone → cracking → active → saturation.
 
-    // Band 0: P_ref = 302 kPa (~3 bar) — CC1 sweep, Psupply 302→186 kPa
+    // Band 0: Psupply ~ 264 kPa (2.64 bar)  (12 pts from 25 raw)
+    // x = V%, y = Flow (slm)
     static const LookupPoint airFlowBand0[] = {
-        { 0.00f,    0.0f},    // Dead zone
-        { 5.00f,    0.0f},    // Still closed
-        { 5.40f,    0.23f},   // Just cracking
-        { 5.80f,    1.38f},
-        { 6.00f,    3.06f},
-        { 6.40f,    9.27f},
-        { 6.80f,   16.08f},
-        { 7.20f,   23.79f},
-        { 7.60f,   32.31f},
-        { 8.00f,   42.32f},
-        { 8.40f,   52.92f},
-        { 8.80f,   65.84f},
-        { 9.20f,   89.53f},
-        { 9.60f,  110.56f},
-        {10.00f,  111.79f},   // Saturated (~186 kPa supply)
-        {14.00f,  112.39f},   // Flat at max
+        {   0.00f,    -0.00f},  // Dead zone
+        {   5.00f,     0.00f},  // Dead zone
+        {   5.50f,     0.20f},  // Cracking
+        {   6.00f,     2.24f},  // Cracking
+        {   6.50f,     9.66f},  // Cracking
+        {   7.50f,    28.42f},
+        {   8.00f,    40.25f},
+        {   8.50f,    53.65f},
+        {   9.00f,    70.85f},
+        {   9.50f,   105.32f},
+        {  10.00f,   111.58f},
+        {  12.00f,   112.05f}   // Saturated
     };
 
-    // Band 1: P_ref = 451 kPa (~4.5 bar) — CC1 sweep, Psupply 451→298 kPa
+    // Band 1: Psupply ~ 401 kPa (4.01 bar)  (12 pts from 25 raw)
+    // x = V%, y = Flow (slm)
     static const LookupPoint airFlowBand1[] = {
-        { 0.00f,    0.0f},    // Dead zone
-        { 5.00f,    0.0f},    // Still closed
-        { 5.50f,    0.17f},   // Just cracking
-        { 6.00f,    1.42f},
-        { 6.50f,    8.73f},
-        { 7.00f,   18.87f},
-        { 7.50f,   31.04f},
-        { 8.00f,   46.83f},
-        { 8.50f,   62.05f},
-        { 9.00f,   74.92f},
-        { 9.50f,  111.69f},
-        {10.00f,  147.76f},
-        {10.50f,  157.79f},
-        {11.00f,  159.17f},   // Saturated (~298 kPa supply)
-        {14.00f,  159.47f},   // Flat at max
+        {   0.00f,     0.00f},  // Dead zone
+        {   5.50f,     0.04f},  // Dead zone
+        {   6.00f,     0.64f},  // Cracking
+        {   6.50f,     5.83f},  // Cracking
+        {   7.00f,    15.55f},  // Cracking
+        {   8.00f,    42.45f},
+        {   8.50f,    59.23f},
+        {   9.00f,    79.64f},
+        {   9.50f,   106.67f},
+        {  10.00f,   144.83f},
+        {  11.00f,   159.60f},  // Saturated
+        {  12.00f,   160.50f}   // Saturated
     };
 
-    // Band 2: P_ref = 604 kPa (~6 bar) — CC1 sweep, Psupply 604→376 kPa
+    // Band 2: Psupply ~ 553 kPa (5.53 bar)  (12 pts from 25 raw)
+    // x = V%, y = Flow (slm)
     static const LookupPoint airFlowBand2[] = {
-        { 0.00f,    0.0f},    // Dead zone
-        { 5.00f,    0.0f},    // Still closed
-        { 5.60f,    0.17f},   // Just cracking
-        { 6.00f,    0.91f},
-        { 6.40f,    4.08f},
-        { 6.80f,   12.89f},
-        { 7.20f,   22.48f},
-        { 7.60f,   34.40f},
-        { 8.00f,   48.91f},
-        { 8.40f,   68.54f},
-        { 8.80f,   84.81f},
-        { 9.20f,  103.18f},
-        { 9.60f,  127.14f},
-        {10.00f,  160.04f},
-        {10.60f,  194.88f},
-        {11.20f,  195.50f},   // Saturated (~384 kPa supply)
+        {   0.00f,     0.00f},  // Dead zone
+        {   5.50f,     0.03f},  // Dead zone
+        {   6.00f,     0.48f},  // Cracking
+        {   6.50f,     3.68f},  // Cracking
+        {   7.00f,    14.51f},  // Cracking
+        {   8.00f,    44.86f},
+        {   8.50f,    69.13f},
+        {   9.00f,    90.00f},
+        {   9.50f,   117.18f},
+        {  10.00f,   153.70f},
+        {  10.50f,   189.31f},
+        {  12.00f,   204.00f}   // Saturated
     };
 
-    _airValve.setFlowBand(0, 302.0f, airFlowBand0,
-                          sizeof(airFlowBand0) / sizeof(airFlowBand0[0]));
-    _airValve.setFlowBand(1, 451.0f, airFlowBand1,
-                          sizeof(airFlowBand1) / sizeof(airFlowBand1[0]));
-    _airValve.setFlowBand(2, 604.0f, airFlowBand2,
-                          sizeof(airFlowBand2) / sizeof(airFlowBand2[0]));
+    _airValve.setFlowBand(0, 264.0f, airFlowBand0, 12);
+    _airValve.setFlowBand(1, 401.0f, airFlowBand1, 12);
+    _airValve.setFlowBand(2, 553.0f, airFlowBand2, 12);
 
     // O2 valve: use same tables as air until separately characterized
-    _o2Valve.setFlowBand(0, 302.0f, airFlowBand0,
-                         sizeof(airFlowBand0) / sizeof(airFlowBand0[0]));
-    _o2Valve.setFlowBand(1, 451.0f, airFlowBand1,
-                         sizeof(airFlowBand1) / sizeof(airFlowBand1[0]));
-    _o2Valve.setFlowBand(2, 604.0f, airFlowBand2,
-                         sizeof(airFlowBand2) / sizeof(airFlowBand2[0]));
+    _o2Valve.setFlowBand(0, 264.0f, airFlowBand0, 12);
+    _o2Valve.setFlowBand(1, 401.0f, airFlowBand1, 12);
+    _o2Valve.setFlowBand(2, 553.0f, airFlowBand2, 12);
 
     // Expiratory valve pressure table: x = PEEP setpoint (mbar), y = current (A)
     // Higher current = more closed = higher held pressure
@@ -566,7 +656,106 @@ void LocalValveController::setDefaults() {
     _expValve.setPressureTable(expPressureTable,
                                sizeof(expPressureTable) / sizeof(expPressureTable[0]));
 
+    // ======================================================================
+    // BLOWER PRESSURE-BANDED FLOW TABLES (2D flow surface)
+    // ======================================================================
+    // Each band is a PWM% → Flow (slm) table at a reference counter pressure (Paw).
+    // Measured from CC4 sweeps at increasing exp valve restriction (V0, V1, V2, V4).
+    // The feedforward does inverse lookup: desired flow + live Paw → PWM%.
+    //
+    // Reduced from 21 to 16 points per band: dead → active → saturation.
+
+    // Band 0: Paw_ref ≈ 8.4 mbar — CC4 sweep, no restriction (exp valve open)
+    // Flow range 0–227 slm, saturates at 85% PWM
+    static const LookupPoint blowerFlowBand0[] = {
+        {  0.00f,    0.00f},   // Dead
+        {  5.00f,   11.90f},   // First response
+        { 10.00f,   18.21f},
+        { 15.00f,   26.46f},
+        { 20.00f,   39.41f},
+        { 25.00f,   52.83f},
+        { 30.00f,   66.34f},
+        { 40.00f,   96.70f},
+        { 50.00f,  129.25f},
+        { 60.00f,  159.24f},
+        { 65.00f,  175.06f},
+        { 70.00f,  190.16f},
+        { 75.00f,  206.56f},
+        { 80.00f,  221.14f},
+        { 85.00f,  226.41f},   // Saturation onset
+        {100.00f,  226.85f},   // Flat at max
+    };
+
+    // Band 1: Paw_ref ≈ 13.3 mbar — CC4 sweep, exp V=1%
+    // Flow range 0–213 slm, saturates at 85% PWM
+    static const LookupPoint blowerFlowBand1[] = {
+        {  0.00f,    0.00f},
+        {  5.00f,    8.43f},
+        { 10.00f,   11.75f},
+        { 15.00f,   17.62f},
+        { 20.00f,   25.93f},
+        { 25.00f,   34.50f},
+        { 30.00f,   43.77f},
+        { 40.00f,   74.08f},
+        { 50.00f,  108.01f},
+        { 60.00f,  138.21f},
+        { 65.00f,  155.55f},
+        { 70.00f,  172.40f},
+        { 75.00f,  188.14f},
+        { 80.00f,  204.23f},
+        { 85.00f,  213.29f},   // Saturation onset
+        {100.00f,  213.25f},   // Flat at max
+    };
+
+    // Band 2: Paw_ref ≈ 19.0 mbar — CC4 sweep, exp V=2%
+    // Flow range 0–190 slm, saturates at 85% PWM
+    static const LookupPoint blowerFlowBand2[] = {
+        {  0.00f,    0.00f},
+        {  5.00f,    8.89f},
+        { 10.00f,   11.49f},
+        { 15.00f,   17.19f},
+        { 20.00f,   24.88f},
+        { 25.00f,   32.57f},
+        { 30.00f,   40.24f},
+        { 40.00f,   57.65f},
+        { 50.00f,   79.31f},
+        { 60.00f,  105.13f},
+        { 65.00f,  124.18f},
+        { 70.00f,  142.60f},
+        { 75.00f,  161.52f},
+        { 80.00f,  177.61f},
+        { 85.00f,  190.31f},   // Saturation onset
+        {100.00f,  190.03f},   // Flat at max
+    };
+
+    // Band 3: Paw_ref ≈ 24.7 mbar — CC4 sweep, exp V=4%
+    // Flow range 0–149 slm, saturates at 85% PWM
+    static const LookupPoint blowerFlowBand3[] = {
+        {  0.00f,    0.00f},
+        {  5.00f,    9.00f},
+        { 10.00f,   11.50f},
+        { 15.00f,   17.21f},
+        { 20.00f,   24.95f},
+        { 25.00f,   32.33f},
+        { 30.00f,   40.10f},
+        { 40.00f,   57.19f},
+        { 50.00f,   77.69f},
+        { 60.00f,   95.05f},
+        { 65.00f,  103.99f},
+        { 70.00f,  112.79f},
+        { 75.00f,  122.59f},
+        { 80.00f,  135.57f},
+        { 85.00f,  148.32f},   // Saturation onset
+        {100.00f,  149.34f},   // Flat at max
+    };
+
+    _blower.setFlowBand(0,  8.4f, blowerFlowBand0, 16);
+    _blower.setFlowBand(1, 13.3f, blowerFlowBand1, 16);
+    _blower.setFlowBand(2, 19.0f, blowerFlowBand2, 16);
+    _blower.setFlowBand(3, 24.7f, blowerFlowBand3, 16);
+
     Serial.println("[LLC] Local valve controllers initialized with pressure-banded flow tables");
+    Serial.println("[LLC] Blower: 4 bands (Paw 8.4–24.7 mbar), max ~227 slm");
     Serial.println("[LLC] ⚠️ Calibrate valve tables before clinical use!");
 }
 
@@ -574,6 +763,7 @@ void LocalValveController::reset() {
     _airValve.reset();
     _o2Valve.reset();
     _expValve.reset();
+    _blower.reset();
 }
 
 void LocalValveController::update(const LocalValveControllerSetpoints& sp,
@@ -583,12 +773,16 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
         // Pass-through mode: send flow/pressure setpoints directly to MUX
         // (original behavior when downstream controllers handle the LLC)
         if (_muxRouter) {
-            _muxRouter->sendSetFlow(_airMuxChannel, sp.airFlow_slm);
-            _muxRouter->sendSetFlow(_o2MuxChannel, sp.o2Flow_slm);
-            if (sp.expValveClosed) {
-                _muxRouter->sendCommand(_expMuxChannel, 'V', 0);
-            } else if (sp.expValveActive) {
-                _muxRouter->sendSetPressure(_expMuxChannel, sp.expPressure_mbar);
+            if (_airMuxChannel != sp.skipMuxChannel)
+                _muxRouter->sendSetFlow(_airMuxChannel, sp.airFlow_slm);
+            if (_o2MuxChannel != sp.skipMuxChannel)
+                _muxRouter->sendSetFlow(_o2MuxChannel, sp.o2Flow_slm);
+            if (_expMuxChannel != sp.skipMuxChannel) {
+                if (sp.expValveClosed) {
+                    _muxRouter->sendCommand(_expMuxChannel, 'V', 0);
+                } else if (sp.expValveActive) {
+                    _muxRouter->sendSetPressure(_expMuxChannel, sp.expPressure_mbar);
+                }
             }
         }
         return;
@@ -607,7 +801,8 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
     airMeas.airwayPressure_mbar = meas.airwayPressure_mbar;
 
     float airCurrent = _airValve.update(airSP, airMeas, dt);
-    sendValveCurrent(_airMuxChannel, airCurrent);
+    if (_airMuxChannel != sp.skipMuxChannel)
+        sendValveCurrent(_airMuxChannel, airCurrent);
 
     // --- O2 valve ---
     InspValveSetpoints o2SP;
@@ -620,7 +815,8 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
     o2Meas.airwayPressure_mbar = meas.airwayPressure_mbar;
 
     float o2Current = _o2Valve.update(o2SP, o2Meas, dt);
-    sendValveCurrent(_o2MuxChannel, o2Current);
+    if (_o2MuxChannel != sp.skipMuxChannel)
+        sendValveCurrent(_o2MuxChannel, o2Current);
 
     // --- Expiratory valve ---
     float expCurrent;
@@ -631,12 +827,38 @@ void LocalValveController::update(const LocalValveControllerSetpoints& sp,
     } else {
         expCurrent = _expValve.forceOpen();
     }
-    sendValveCurrent(_expMuxChannel, expCurrent);
+    if (_expMuxChannel != sp.skipMuxChannel)
+        sendValveCurrent(_expMuxChannel, expCurrent);
+
+    // --- Blower ---
+    if (sp.skipBlower) {
+        // Characterizer owns blower output — don't touch
+    } else if (sp.blowerActive && sp.blowerFlow_slm > 0.01f) {
+        BlowerSetpoints blowerSP;
+        blowerSP.flow_slm = sp.blowerFlow_slm;
+        blowerSP.pressureLimit_mbar = sp.blowerPressureLimit_mbar;
+
+        BlowerMeasurements blowerMeas;
+        blowerMeas.flow_slm = meas.blowerFlow_slm;
+        blowerMeas.airwayPressure_mbar = meas.airwayPressure_mbar;
+
+        float blowerPwm = _blower.update(blowerSP, blowerMeas, dt);
+        sendBlowerPwm(blowerPwm);
+    } else {
+        _blower.reset();
+        sendBlowerPwm(0.0f);
+    }
 }
 
 void LocalValveController::sendValveCurrent(uint8_t channel, float current_A) {
     if (_muxRouter) {
         // Motor drivers accept V% commands, not current — send as V%
         _muxRouter->sendCommand(channel, 'V', current_A);
+    }
+}
+
+void LocalValveController::sendBlowerPwm(float pwmPercent) {
+    if (_blowerActuator) {
+        _blowerActuator->outputToValve(pwmPercent);
     }
 }

@@ -5,30 +5,43 @@
 
 // Forward declarations
 class SerialMuxRouter;
+class ActuatorControl;
 struct SensorData;
 
 // ============================================================================
-// Valve Characterizer — Automated V% sweep for inspiratory valve mapping
+// Valve / Blower / Exp Characterizer — Automated sweep for actuator mapping
 // ============================================================================
-// Ramps V% from 0 to maxVoltage in small steps on a selected MUX channel,
-// recording flow and supply pressure at each step.  Output is a raw flow table
-// (V% → Flow at measured Psupply) for use in PressureBandedTable.
+// Ramps control signal (V% or PWM%) from 0 to max in small steps on a selected
+// channel, recording flow and pressure at each step.
 //
-// Run multiple sweeps at different supply pressures to populate 2-3 bands.
+// Three characterization modes:
+//   ch 1,2 (Insp valves): Sweep V% → measure flow + Psupply.
+//       Output: V% → Flow table at measured Psupply (for PressureBandedTable).
+//       Run at different supply pressures to build 2D surface.
+//
+//   ch 4 (Blower, GPIO21 PWM): Sweep PWM% → measure flow (bus0) + Paw (ELVH).
+//       Output: PWM% → Flow table at measured counter pressure.
+//       Run at different counter pressures/resistances to build 2D surface.
+//
+//   ch 3 (Exp valve): Sweep V% → measure Paw (ELVH) + flow (bus0).
+//       Output: V% → Paw table at measured flow.
+//       Run at different flows (set via LF) to build 2D surface.
 //
 // Usage:
 //   CC<channel>[,maxV[,stepV[,settleMs]]]   Start characterization
 //   CX                                       Abort characterization
-//
-// Only MUX channels 1 (air) and 2 (O2) are supported.
-//   Channel 1 → Bus 0 sensors (sfm3505_air_flow, supply_pressure)
-//   Channel 2 → Bus 1 sensors (sfm3505_air_flow, supply_pressure)
+
+enum CharMode {
+    CHARMODE_INSP_VALVE = 0,    // ch 1,2: V% → flow (at Psupply)
+    CHARMODE_BLOWER,            // ch 4:   PWM% → flow (at counter pressure)
+    CHARMODE_EXP_VALVE          // ch 3:   V% → Paw (at flow)
+};
 
 struct CharacterizationConfig {
-    uint8_t  muxChannel;        // 1 = air, 2 = O2
-    float    maxVoltage;        // Max voltage to ramp to (V)
-    float    stepVoltage;       // Voltage increment per step (V)
-    uint32_t settleTime_ms;     // Wait time after setting voltage (ms)
+    uint8_t  muxChannel;        // 1=air, 2=O2, 3=exp, 4=blower(PWM)
+    float    maxVoltage;        // Max control signal (V% or PWM%)
+    float    stepVoltage;       // Control signal increment per step
+    uint32_t settleTime_ms;     // Wait time after setting control signal (ms)
     uint8_t  samplesPerStep;    // Number of sensor readings to average
 };
 
@@ -51,13 +64,13 @@ class ValveCharacterizer {
 public:
     ValveCharacterizer();
 
-    /// Attach the MUX router used to send voltage commands
-    void begin(SerialMuxRouter* muxRouter);
+    /// Attach the MUX router and optional blower actuator (for direct PWM)
+    void begin(SerialMuxRouter* muxRouter, ActuatorControl* blowerActuator = nullptr);
 
     /// Start a characterization sweep.  Returns false if already running or invalid channel.
     bool start(const CharacterizationConfig& config);
 
-    /// Abort a running sweep, set voltage to zero
+    /// Abort a running sweep, set output to zero
     void abort();
 
     /// Call every main-loop iteration.  Needs current sensor data from both buses.
@@ -66,11 +79,16 @@ public:
 
     bool isRunning() const { return _state != CHAR_IDLE; }
 
+    /// Return MUX channel being characterized (1-4), or 0 if idle
+    uint8_t getActiveChannel() const { return isRunning() ? _config.muxChannel : 0; }
+
     CharState getState() const { return _state; }
 
 private:
     SerialMuxRouter*       _muxRouter;
+    ActuatorControl*       _blowerActuator;   // For GPIO21 direct PWM (ch4)
     CharacterizationConfig _config;
+    CharMode               _charMode;
     CharState              _state;
 
     // Sweep state
@@ -96,14 +114,14 @@ private:
     /// Get supply pressure reading for the configured channel
     float getSupplyPressure(const SensorData& bus0, const SensorData& bus1) const;
 
-    /// Set voltage on the configured MUX channel
-    void setVoltage(float voltage);
+    /// Set control signal on the configured channel (V% for MUX, PWM% for blower)
+    void setOutput(float percent);
 
-    /// Print a single data row
+    /// Print a single data row (format depends on mode)
     void printDataRow(const CharacterizationPoint& pt);
 
-    /// Print the final Cv table in code-ready format
-    void printCvTable();
+    /// Print the final table in code-ready format (format depends on mode)
+    void printSummaryTable();
 
     /// Print the header at start
     void printHeader();

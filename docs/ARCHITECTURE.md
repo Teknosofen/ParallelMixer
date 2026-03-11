@@ -115,11 +115,15 @@ Main Loop (~200 Hz)
 │   ├── Read ELVH low pressure + temperature (Bus 0 & 1)
 │   ├── Read ABP2 pressure async (Bus 0 & 1)
 │   ├── FDO2 async check (500ms sample period = 2 Hz)
-│   ├── Ventilator state machine update (if running)
-│   ├── Execute actuator control (all 6 channels)
-│   │   ├── PID control
-│   │   ├── Signal generation (sine/step/triangle/sweep)
-│   │   └── Manual valve control
+│   ├── Valve characterizer update (CC, non-blocking state machine)
+│   ├── updateVentilatorControl()
+│   │   ├── LF mode: LLC owns air + O2 + blower; skips exp valve (ch3)
+│   │   │   └── CC override: if characterizer owns ch1/ch2, skip that instead
+│   │   └── Ventilator mode: LLC owns all channels (air, O2, exp, blower)
+│   ├── executeActuatorControl()
+│   │   ├── Skipped entirely if ventilator running or CC running
+│   │   ├── LF mode: only actuators[3] (exp valve via M3+V)
+│   │   └── Idle mode: all actuator channels (M+V, signal generators)
 │   ├── Serial MUX router update (non-blocking)
 │   └── WiFi buffer update (high-speed data collection)
 │
@@ -139,6 +143,47 @@ Main Loop (~200 Hz)
 ```
 
 **Key Principle**: No blocking delays in main loop. All long-duration operations are asynchronous or time-sliced.
+
+### Actuator Output Ownership
+
+Multiple subsystems can send commands to the same MUX channel or GPIO. A strict arbitration scheme prevents conflicts:
+
+```
+                      ┌─────────────────────────────────────────────────┐
+                      │              Per-Channel Ownership               │
+ ┌─────────────┐      │  Ch 1 (Air)  Ch 2 (O2)  Ch 3 (Exp)  Ch 4 (Blw)│
+ │ Ventilator   │─LLC──│    LLC          LLC         LLC        LLC     │
+ │ (Auto mode)  │      │  (all channels, skipMuxChannel = 0)            │
+ ├─────────────┤      ├─────────────────────────────────────────────────┤
+ │ LF mode      │─LLC──│    LLC          LLC        MANUAL      LLC    │
+ │ (Manual test)│      │  (skipMuxChannel = 3 unless CC ≠ 0)           │
+ ├─────────────┤      ├─────────────────────────────────────────────────┤
+ │ CC sweep     │──CC──│   CC if ch=1   CC if ch=2  CC if ch=3  CC(PWM)│
+ │ (Characteriz)│      │  (other channels: per LF/idle rules)           │
+ ├─────────────┤      ├─────────────────────────────────────────────────┤
+ │ Idle         │─ACT──│    M+V          M+V         M+V        M+V   │
+ │ (no LF/vent) │      │  executeActuatorControl() runs all channels    │
+ └─────────────┘      └─────────────────────────────────────────────────┘
+```
+
+**Decision logic in each 100 Hz cycle:**
+
+1. **`valveChar.update()`** — always runs first. If active, sends V% (or PWM%) to its one channel.
+2. **`updateVentilatorControl()`** — builds LLC setpoints with `skipMuxChannel`:
+   - *LF mode:* skip = ch3 (exp), so LLC never touches exp valve. If CC is sweeping ch1 or ch2, skip that channel instead.
+   - *Ventilator mode:* skip = 0 (LLC owns everything).
+   - The LLC's `update()` checks `skipMuxChannel` before every `sendValveCurrent()` call.
+3. **`executeActuatorControl()`** — handles channels the LLC doesn't own:
+   - *Ventilator running:* returns immediately (LLC owns all).
+   - *CC running:* returns immediately (characterizer owns its channel).
+   - *LF mode:* runs only `actuators[3].execute()` — this is the exp valve, driven by M3+V commands.
+   - *Idle:* runs all `actuators[i].execute()` (M+V, signal generators, etc.).
+
+**Why this matters:**
+- In LF mode you can set a constant flow with `LF10` and independently control the exp valve with `M3`, `V3` — the LLC will not overwrite it.
+- During `CC3` (exp valve characterization), the characterizer sends V% to ch3 while LF holds air/O2 flow — neither LLC nor `executeActuatorControl()` interferes.
+- During `CC4` (blower characterization), `skipBlower = true` prevents the LLC from zeroing the blower PWM.
+- In ventilator mode the LLC has exclusive control of all four actuator channels.
 
 ---
 
@@ -725,7 +770,7 @@ Class: PressureBandedTable   (include/LocalValveController.hpp)
 
 ### Automated Characterization (CC Command)
 
-The `ValveCharacterizer` class performs an automated voltage sweep on an inspiratory valve. It is a non-blocking state machine that runs inside the main control loop.
+The `ValveCharacterizer` class performs an automated output sweep on any of the four actuator channels (two inspiratory valves, expiratory valve, blower). It is a non-blocking state machine that runs inside the main control loop.
 
 #### Workflow
 
@@ -766,21 +811,39 @@ CX                                      — abort sweep
 
 | Parameter | Default | Description |
 |:----------|:-------:|:-----------|
-| `channel` | — | **Required.** 1 = air (Bus 0 sensors), 2 = O2 (Bus 1 sensors) |
-| `maxV` | 12.0 | Maximum V% of sweep |
-| `stepV` | 0.1 | V% increment per step |
+| `channel` | — | **Required.** 1 = air, 2 = O2, 3 = exp valve, 4 = blower |
+| `maxV` | 12 (ch 1–3), 100 (ch 4) | Maximum output % |
+| `stepV` | 0.1 (ch 1–3), 1.0 (ch 4) | Output % increment per step |
 | `settleMs` | 200 | Stabilization time per step (ms) |
 
-> **Important:** Disable the LLC (`LE0`) before running a sweep so the local controller does not fight the characterizer.
+Modes determined by channel:
+- **Ch 1/2 (Insp valves):** Sends V% via MUX, measures flow (Bus 0 for air, Bus 1 for O2) at supply pressure.
+- **Ch 3 (Exp valve):** Sends V% via MUX, measures airway pressure (Paw) while flow is held constant via `LF`.
+- **Ch 4 (Blower):** Drives GPIO21 PWM directly, measures flow (Bus 0) at varying counter pressure.
+
+> **Note:** In LF mode the LLC **automatically skips** the exp valve channel (ch3), so `CC3` sweeps and `M3`+`V` commands are not overwritten. For `CC4` (blower), the LLC skips blower PWM. You no longer need to manually disable the LLC before characterization.
+> For **exp valve** sweeps, start a constant flow first with `LF<flow>` before issuing `CC3`.
 
 #### Recommended Procedure
 
+**Inspiratory valves (ch 1/2):**
 1. Connect supply gas at a known regulated pressure (e.g., 3 bar).
 2. Open downstream flow path (no patient, wye disconnected).
 3. Run `CC1,14,0.2,250` — sweep air valve 0–14% in 0.2% steps, 250 ms settle.
 4. Save the printed flow table.
-5. **Change regulator to a different pressure** (e.g., 4.5 bar, then 6 bar) and repeat.
-6. You now have 2–3 flow tables at different supply pressures — one per band.
+5. Change regulator to a different pressure (e.g., 4.5 bar, then 6 bar) and repeat.
+6. Repeat with `CC2` for the O2 valve.
+
+**Blower (ch 4):**
+1. Connect blower output to patient circuit with a partial restriction to create counter pressure.
+2. Run `CC4,100,2,300` — sweep blower 0–100% in 2% steps.
+3. Change the restriction to get a different Paw and repeat.
+
+**Expiratory valve (ch 3):**
+1. Set a constant flow: `LF20` (20 slm air).
+2. Run `CC3,12,0.1,200` — sweep exp valve 0–12% in 0.1% steps.
+3. Change flow rate (e.g., `LF5`, `LF40`) and repeat.
+4. Stop the flow test: `LX`.
 
 #### Reducing Points
 
@@ -792,10 +855,10 @@ Each sweep may produce 50–70 data points, but `PiecewiseLinearTable` holds at 
 
 ### Integration into the Control System
 
-The tables live in `LocalValveController::setDefaults()` inside [src/LocalValveController.cpp](../src/LocalValveController.cpp). Each band is a `static const LookupPoint[]` array loaded via `setFlowBand()`:
+The tables live in `LocalValveController::setDefaults()` inside [src/LocalValveController.cpp](../src/LocalValveController.cpp). Each band is a `static const LookupPoint[]` array loaded via `setFlowBand()` (or `setPressureBand()` for the exp valve):
 
 ```cpp
-// Band 0: measured at ~3 bar (P_ref = 302 kPa)
+// Insp valve — Band 0: measured at ~3 bar (P_ref = 302 kPa)
 static const LookupPoint airFlowBand0[] = {
     { 0.00f,    0.0f},    // Dead zone
     { 5.00f,    0.0f},    // Still closed
@@ -807,7 +870,7 @@ static const LookupPoint airFlowBand0[] = {
 _airValve.setFlowBand(0, 302.0f, airFlowBand0, count);
 ```
 
-Repeat for bands 1 and 2 at higher pressures. The O2 valve uses the same tables until separately characterized (`CC2`).
+Repeat for bands 1 and 2 at higher pressures. The O2 valve uses the same tables until separately characterized (`CC2`). The exp valve and blower follow the same pattern with their respective condition variables (flow rate for exp, Paw for blower). See [VALVE_CALIBRATION.md](VALVE_CALIBRATION.md) for detailed multi-condition procedures.
 
 ### Feedforward Path
 

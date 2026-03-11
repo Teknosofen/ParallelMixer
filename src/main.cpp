@@ -62,11 +62,14 @@ bool sensors_bus1_initialized = false; // Bus 1 sensors
 uint32_t past_time;          // For GUI/serial output timing
 uint32_t control_past_time;  // For control system execution timing
 
-// LLC manual test mode (LF command)
+// LLC manual test mode (LF/LB commands)
 static bool  llcManualTestActive = false;
 static float llcManualAirFlow_slm = 0.0f;
 static float llcManualO2Flow_slm  = 0.0f;
 static float llcManualMaxPressure_mbar = 9999.0f;  // No pressure limit in pure flow test (LP to override)
+static bool  llcBlowerTestActive = false;
+static float llcBlowerFlow_slm = 0.0f;
+static float llcBlowerMaxPressure_mbar = 40.0f;  // Default blower pressure limit
 
 void setup() {
   // Initialize USB Serial - use default USB CDC
@@ -288,13 +291,13 @@ void setup() {
 
   // Initialize local valve controller (LLC)
   // Sits between HLC outputs and MUX serial commands
-  localValveCtrl.begin(&muxRouter, LocalValveControllerConfig{});
+  localValveCtrl.begin(&muxRouter, &actuators[4], LocalValveControllerConfig{});
   localValveCtrl.setDefaults();
   localValveCtrl.setEnabled(false);  // Start disabled (pass-through to downstream controllers)
   hostCom.println("Local valve controller initialized (disabled, use LE1 to enable)");
 
   // Initialize valve characterizer
-  valveChar.begin(&muxRouter);
+  valveChar.begin(&muxRouter, &actuators[4]);  // Pass blower actuator for ch4 PWM characterization
   hostCom.println("Valve characterizer ready (CC<ch> to start, CX to abort)");
 
   past_time = micros();
@@ -320,6 +323,15 @@ void updateVentilatorControl(uint32_t now) {
     llcSP.expPressure_mbar = 0;
     llcSP.expValveClosed   = false;
     llcSP.expValveActive   = false;
+    llcSP.blowerFlow_slm   = llcBlowerTestActive ? llcBlowerFlow_slm : 0.0f;
+    llcSP.blowerPressureLimit_mbar = llcBlowerMaxPressure_mbar;
+    llcSP.blowerActive     = llcBlowerTestActive;
+
+    // LF mode doesn't control exp valve — skip ch3 so M3+V commands work.
+    // If characterizer owns ch1 or ch2, skip that instead (exp stays V0, fine).
+    uint8_t charCh = valveChar.getActiveChannel();
+    llcSP.skipMuxChannel = (charCh >= 1 && charCh <= 2) ? charCh : 3;
+    llcSP.skipBlower     = (charCh == 4);
 
     LocalValveControllerMeasurements llcMeas;
     llcMeas.airFlow_slm          = sensorData_bus0.sfm3505_air_flow;
@@ -327,6 +339,7 @@ void updateVentilatorControl(uint32_t now) {
     llcMeas.airSupplyPressure_kPa = sensorData_bus0.supply_pressure;
     llcMeas.o2SupplyPressure_kPa  = sensorData_bus1.supply_pressure;
     llcMeas.airwayPressure_mbar   = getELVH_Pressure();
+    llcMeas.blowerFlow_slm        = sensorData_bus0.sfm3505_air_flow;
 
     float dt = sysConfig.control_interval / 1000000.0f;
     localValveCtrl.update(llcSP, llcMeas, dt);
@@ -335,15 +348,27 @@ void updateVentilatorControl(uint32_t now) {
     static uint16_t lfDebugCounter = 0;
     if (++lfDebugCounter >= 100) {
       lfDebugCounter = 0;
-      auto airSt = localValveCtrl.getAirValveStatus();
-      auto o2St  = localValveCtrl.getO2ValveStatus();
-      Serial.printf("[LF] SP: air=%.1f o2=%.1f | Meas: air=%.2f o2=%.2f | Psup=%.0f/%.0f kPa | dt=%.4f\n",
-                    llcSP.airFlow_slm, llcSP.o2Flow_slm,
-                    llcMeas.airFlow_slm, llcMeas.o2Flow_slm,
-                    llcMeas.airSupplyPressure_kPa, llcMeas.o2SupplyPressure_kPa, dt);
-      Serial.printf("     Air: FF=%.2f PI=%.2f Out=%.2f V%% | O2: FF=%.2f PI=%.2f Out=%.2f V%%\n",
-                    airSt.feedforwardCurrent_A, airSt.flowPIOutput_A, airSt.outputCurrent_A,
-                    o2St.feedforwardCurrent_A, o2St.flowPIOutput_A, o2St.outputCurrent_A);
+      if (llcSP.airFlow_slm > 0.01f || llcSP.o2Flow_slm > 0.01f) {
+        auto airSt = localValveCtrl.getAirValveStatus();
+        auto o2St  = localValveCtrl.getO2ValveStatus();
+        Serial.printf("[LF] SP: air=%.1f o2=%.1f | Meas: air=%.2f o2=%.2f | Psup=%.0f/%.0f kPa | dt=%.4f\n",
+                      llcSP.airFlow_slm, llcSP.o2Flow_slm,
+                      llcMeas.airFlow_slm, llcMeas.o2Flow_slm,
+                      llcMeas.airSupplyPressure_kPa, llcMeas.o2SupplyPressure_kPa, dt);
+        Serial.printf("     Air: FF=%.2f PI=%.2f Out=%.2f V%% | O2: FF=%.2f PI=%.2f Out=%.2f V%%\n",
+                      airSt.feedforwardCurrent_A, airSt.flowPIOutput_A, airSt.outputCurrent_A,
+                      o2St.feedforwardCurrent_A, o2St.flowPIOutput_A, o2St.outputCurrent_A);
+      }
+      if (llcBlowerTestActive) {
+        auto blwSt = localValveCtrl.getBlowerStatus();
+        Serial.printf("[LB] SP: flow=%.1f Plim=%.0f | Meas: flow=%.2f Paw=%.1f | dt=%.4f\n",
+                      llcBlowerFlow_slm, llcBlowerMaxPressure_mbar,
+                      llcMeas.blowerFlow_slm, llcMeas.airwayPressure_mbar, dt);
+        Serial.printf("     Blw: FF=%.1f PI=%.1f Out=%.1f PWM%% %s\n",
+                      blwSt.feedforwardPwmPercent, blwSt.flowPIOutput,
+                      blwSt.outputPwmPercent,
+                      blwSt.pressureLimiting ? "PLIM" : "FLOW");
+      }
     }
     return;
   }
@@ -397,6 +422,11 @@ void updateVentilatorControl(uint32_t now) {
   llcSP.expPressure_mbar = ventOut.expValveSetpoint;
   llcSP.expValveClosed = ventOut.expValveClosed;
   llcSP.expValveActive = ventOut.expValveAsPressure;
+  llcSP.blowerFlow_slm = 0;  // TODO: HLC blower flow setpoint when blower breath mode added
+  llcSP.blowerPressureLimit_mbar = ventCfg.maxPressure_mbar;
+  llcSP.blowerActive = false;  // TODO: Enable when HLC requests blower
+  llcSP.skipMuxChannel = 0;
+  llcSP.skipBlower     = false;
 
   // Build LLC measurements from sensor data
   LocalValveControllerMeasurements llcMeas;
@@ -405,6 +435,7 @@ void updateVentilatorControl(uint32_t now) {
   llcMeas.airSupplyPressure_kPa = sensorData_bus0.supply_pressure;
   llcMeas.o2SupplyPressure_kPa = sensorData_bus1.supply_pressure;
   llcMeas.airwayPressure_mbar = getELVH_Pressure();
+  llcMeas.blowerFlow_slm = sensorData_bus0.sfm3505_air_flow;
 
   // LLC handles valve current computation OR pass-through
   float dt = 0.01f;  // 100 Hz control loop = 10 ms
@@ -414,7 +445,14 @@ void updateVentilatorControl(uint32_t now) {
 /** Execute actuator control for all MUX channels (when ventilator not running). */
 void executeActuatorControl() {
   if (ventilator.isRunning()) return;
-  if (llcManualTestActive) return;  // LLC manual test owns the valve outputs
+  if (valveChar.isRunning()) return;  // Characterizer owns the actuator outputs
+
+  if (llcManualTestActive) {
+    // LF mode: LLC owns air (ch1), O2 (ch2), blower (ch4).
+    // Exp valve (ch3) stays under manual control via M3 + V commands.
+    actuators[3].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
+    return;
+  }
 
   for (uint8_t i = 0; i < NUM_MUX_CHANNELS; i++) {
     actuators[i].execute(sysConfig.digital_flow_reference, sensorData_bus0.flow, sysConfig.quiet_mode);
@@ -466,6 +504,12 @@ void processSerialCommands() {
         Serial.printf("  Exp: I=%.3fA FF=%.3f PressPI=%.3f\n",
                       exp.outputCurrent_A, exp.feedforwardCurrent_A,
                       exp.pressurePIOutput_A);
+        BlowerStatus blw = localValveCtrl.getBlowerStatus();
+        Serial.printf("  Blw: PWM=%.1f%% FF=%.1f FlowPI=%.1f PressPI=%.1f %s%s\n",
+                      blw.outputPwmPercent, blw.feedforwardPwmPercent,
+                      blw.flowPIOutput, blw.pressurePIOutput,
+                      blw.pressureLimiting ? "PLIM" : "FLOW",
+                      blw.active ? "" : " (OFF)");
       }
       parser.clearCommand();
     }
@@ -503,16 +547,19 @@ void processSerialCommands() {
     }
     else if (upper == "LX") {
       // Stop LLC manual test
-      if (llcManualTestActive) {
+      if (llcManualTestActive || llcBlowerTestActive) {
         llcManualTestActive = false;
+        llcBlowerTestActive = false;
         llcManualAirFlow_slm = 0.0f;
         llcManualO2Flow_slm = 0.0f;
+        llcBlowerFlow_slm = 0.0f;
         localValveCtrl.reset();
-        // Send zero current to all valve channels to ensure safe stop
+        // Send zero to all valve channels and blower to ensure safe stop
         muxRouter.sendCommand(1, 'V', 0.0f);  // Air
         muxRouter.sendCommand(2, 'V', 0.0f);  // O2
         muxRouter.sendCommand(3, 'V', 0.0f);  // Exp
-        Serial.println("[LX] Manual test stopped, valves zeroed");
+        actuators[4].outputToValve(0.0f);      // Blower
+        Serial.println("[LX] Manual test stopped, valves+blower zeroed");
       } else {
         Serial.println("[LX] No manual test running");
       }
@@ -527,6 +574,38 @@ void processSerialCommands() {
         Serial.printf("[LP] Pressure limit = %.0f mbar\n", llcManualMaxPressure_mbar);
       } else {
         Serial.printf("LP=%.0f mbar\n", llcManualMaxPressure_mbar);
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "LB") {
+      // LLC blower flow test: LB<flow_slm>[,<pressure_limit_mbar>]
+      String params = cmd.substring(2);
+      params.trim();
+      if (params.length() > 0) {
+        int comma = params.indexOf(',');
+        if (comma < 0) {
+          llcBlowerFlow_slm = params.toFloat();
+        } else {
+          llcBlowerFlow_slm = params.substring(0, comma).toFloat();
+          llcBlowerMaxPressure_mbar = params.substring(comma + 1).toFloat();
+        }
+        llcBlowerTestActive = true;
+        llcManualTestActive = true;  // Activate the manual test loop
+        if (!localValveCtrl.isEnabled()) {
+          localValveCtrl.setEnabled(true);
+          localValveCtrl.reset();
+          Serial.println("[LB] LLC auto-enabled");
+        }
+        Serial.printf("[LB] Blower test: Flow=%.1f slm, Plim=%.0f mbar\n",
+                      llcBlowerFlow_slm, llcBlowerMaxPressure_mbar);
+        Serial.println("[LB] Use LS for status, LX to stop");
+      } else {
+        if (llcBlowerTestActive) {
+          Serial.printf("LB: Flow=%.1f slm, Plim=%.0f mbar (active)\n",
+                        llcBlowerFlow_slm, llcBlowerMaxPressure_mbar);
+        } else {
+          Serial.println("Usage: LB<flow_slm>[,<pressure_limit_mbar>]  e.g. LB50 or LB100,30");
+        }
       }
       parser.clearCommand();
     }
@@ -563,16 +642,20 @@ void processSerialCommands() {
           }
         }
         const char* chName = (charCfg.muxChannel == 1) ? "Air" : 
-                             (charCfg.muxChannel == 2) ? "O2" : "??";
-        Serial.printf("[CC] Channel=%d (%s), maxV=%.1f%%, stepV=%.2f%%, settle=%lums, samples=%d\n",
+                             (charCfg.muxChannel == 2) ? "O2" :
+                             (charCfg.muxChannel == 3) ? "Exp" :
+                             (charCfg.muxChannel == 4) ? "Blower" : "??";
+        Serial.printf("[CC] Channel=%d (%s), max=%.1f%%, step=%.2f%%, settle=%lums, samples=%d\n",
                       charCfg.muxChannel, chName,
                       charCfg.maxVoltage, charCfg.stepVoltage,
                       charCfg.settleTime_ms, charCfg.samplesPerStep);
         valveChar.start(charCfg);
       } else {
-        Serial.println("Usage: CC<ch>[,maxV[,stepV[,settleMs]]]");
-        Serial.println("  ch: 1=air, 2=O2");
-        Serial.println("  Example: CC1,12,0.1,200");
+        Serial.println("Usage: CC<ch>[,max[,step[,settleMs]]]");
+        Serial.println("  ch: 1=air, 2=O2, 3=exp, 4=blower(PWM)");
+        Serial.println("  Example: CC1,12,0.1,200  (air valve sweep)");
+        Serial.println("  Example: CC4,100,1,300   (blower PWM sweep)");
+        Serial.println("  Example: CC3,12,0.1,200  (exp valve, set flow with LF first)");
       }
       parser.clearCommand();
     }

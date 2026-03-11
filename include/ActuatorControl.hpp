@@ -87,6 +87,10 @@ public:
   void setPwmOutput(int8_t pin, uint32_t freq_hz = 20000, uint8_t resolution_bits = 8, uint8_t ledcChannel = 0);
   bool hasPwmOutput() const { return _pwmPin >= 0; }
 
+  // Output to valve/actuator (percentage 0-100%)
+  // Routes to direct PWM if configured, otherwise serial MUX
+  void outputToValve(float signal_percent);
+
   // Get current control state
   ControlState getControlState() const;
 
@@ -149,8 +153,7 @@ private:
   uint8_t _pwmResolutionBits;  // e.g. 8 → max duty = 255
   uint32_t _pwmMaxDuty;        // (1 << resolution) - 1
 
-  // Output methods (now accepts percentage)
-  void outputToValve(float signal_percent);
+  // Output methods (internal)
   void analogOutMCP4725(uint16_t dac_output);
 
   // Signal generators (phase is 0.0 to 1.0, returns percentage)
