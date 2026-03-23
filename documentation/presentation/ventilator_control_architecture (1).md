@@ -178,14 +178,56 @@ States advance based on:
 
 ### Timing Parameters
 
-| Parameter | Description | Calculation |
-|-----------|-------------|-------------|
-| `Respiratory Rate (RR)` | Breaths per minute | Cycle time = 60/RR seconds |
-| `I:E Ratio` | Inspiration:Expiration ratio | Determines time split between phases |
-| `Inspiratory Pause Fraction` | Plateau time as fraction of cycle | Pause time = fraction × (60/RR) |
-| `Active Inspiration Time` | Time for gas delivery | Sum of Non-trig + Support + Synch times |
+The HLC state machine operates exclusively on **pre-calculated absolute times** for each of the 8 states. It does **not** interpret or convert user-facing parameters such as respiratory rate, I:E ratio, or pause percentage. Each state simply receives a duration in milliseconds (or seconds) and advances when that time elapses (or when a synchronization event occurs for Synch states, or immediately for zero-duration states).
 
-**Note**: Active Inspiration Time excludes Pause time for tidal volume calculations.
+| HLC State Parameter | Description |
+|---------------------|-------------|
+| `Time_Insp_NonTrig` | Duration of the mandatory (non-triggerable) inspiration phase |
+| `Time_Insp_Support` | Duration of the inspiration support window |
+| `Time_Insp_Synch` | Maximum wait time for patient-synchronized inspiration termination |
+| `Time_Insp_Pause` | Duration of the inspiratory pause / plateau hold |
+| `Time_Exp_NonTrig` | Duration of the mandatory (non-triggerable) expiration phase |
+| `Time_Exp_Support` | Duration of the expiration support window |
+| `Time_Exp_Synch` | Maximum wait time for patient-synchronized expiration termination |
+| `Time_Exp_Pause` | Duration of the expiratory pause / hold |
+
+The sum of all eight durations defines one complete breathing cycle.
+
+**Note**: The *Active Inspiration Time* used for tidal-volume flow calculations is `Time_Insp_NonTrig + Time_Insp_Support + Time_Insp_Synch` (pause excluded because no gas flows during the hold).
+
+> **Design principle**: By accepting only pre-calculated times, the HLC remains a simple, deterministic state machine. All interpretation of clinician-facing parameters is delegated to the User Interface Layer (see below).
+
+### User Interface Layer (Parameter Conversion)
+
+A **User Interface (UI) layer** sits above the HLC and is responsible for translating clinician-friendly parameters into the absolute state times expected by the HLC. The HLC itself never performs these conversions — it only consumes the resulting time values.
+
+The UI layer accepts parameters such as:
+
+| User-Facing Parameter | Description |
+|----------------------|-------------|
+| `Respiratory Rate (RR)` | Breaths per minute → total cycle time = 60 / RR seconds |
+| `I:E Ratio` | Inspiration-to-expiration ratio → splits the cycle time between the two phases |
+| `Inspiratory Pause (%)` | Fraction of cycle time allocated to inspiratory pause |
+| `Expiratory Pause (%)` | Fraction of cycle time allocated to expiratory pause |
+| `Non-triggerable Inspiration (%)` | Fraction of inspiration phase that is mandatory |
+| `Support Window (%)` | Fraction of inspiration/expiration allocated to support |
+| `Synch Window (%)` | Fraction of inspiration/expiration allocated to synchronization |
+
+The UI layer solves the timing equations and writes the eight absolute durations to the HLC. For example:
+
+```
+Cycle Time          = 60 / RR
+Inspiration Time    = Cycle Time × I / (I + E)
+Expiration Time     = Cycle Time × E / (I + E)
+Time_Insp_Pause     = Cycle Time × (Insp Pause % / 100)
+Active Insp Time    = Inspiration Time − Time_Insp_Pause
+Time_Insp_NonTrig   = Active Insp Time × (Non-trig % / 100)
+... etc.
+```
+
+> **Rationale**: Containing all parameter interpretation and preference adaptation in the UI layer keeps the HLC deterministic and testable. Different user interfaces (touchscreen, remote control, automated protocols) can each implement their own parameter sets and conversion logic while driving the same HLC through a single, well-defined interface of eight state times plus pressure/flow setpoints.
+
+---
 
 ### HLC Parameters
 
