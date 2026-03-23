@@ -3,7 +3,8 @@
     "allow": [
       "Bash(pio run:*)",
       "Bash(pio pkg list:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(pip install:*)"
     ]
   }
 }
