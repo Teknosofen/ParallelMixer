@@ -2,13 +2,16 @@
 
 ## Overview
 
-This document describes a three-layer control architecture for a medical ventilator system. The architecture consists of:
+This document describes a layered control architecture for a medical ventilator system. The architecture consists of:
 
 1. **Layer 1**: Low-Level PID Controllers (Actuator Layer)
 2. **Layer 2**: Low-Level Controller (LLC) - Breathing Phase Control
 3. **Layer 3**: High-Level Controller (HLC) - Ventilation Mode Control
+4. **User Interface Layer**: Parameter Conversion & Clinician Interaction (above HLC)
 
 The control philosophy is based on **indirect control through setpoint manipulation** - higher layers do not send explicit commands but instead modify setpoints that trigger automatic responses in lower layers.
+
+**Separation of concerns**: The HLC operates exclusively on pre-calculated absolute state times. It does not interpret clinician-facing parameters such as respiratory rate, I:E ratio, or pause percentage. All such conversions are performed by the **User Interface Layer**, which sits above the HLC and translates user preferences into the deterministic inputs the HLC expects. This keeps the real-time control path simple and testable, while allowing different user interfaces to share the same HLC.
 
 ---
 
@@ -197,38 +200,6 @@ The sum of all eight durations defines one complete breathing cycle.
 
 > **Design principle**: By accepting only pre-calculated times, the HLC remains a simple, deterministic state machine. All interpretation of clinician-facing parameters is delegated to the User Interface Layer (see below).
 
-### User Interface Layer (Parameter Conversion)
-
-A **User Interface (UI) layer** sits above the HLC and is responsible for translating clinician-friendly parameters into the absolute state times expected by the HLC. The HLC itself never performs these conversions — it only consumes the resulting time values.
-
-The UI layer accepts parameters such as:
-
-| User-Facing Parameter | Description |
-|----------------------|-------------|
-| `Respiratory Rate (RR)` | Breaths per minute → total cycle time = 60 / RR seconds |
-| `I:E Ratio` | Inspiration-to-expiration ratio → splits the cycle time between the two phases |
-| `Inspiratory Pause (%)` | Fraction of cycle time allocated to inspiratory pause |
-| `Expiratory Pause (%)` | Fraction of cycle time allocated to expiratory pause |
-| `Non-triggerable Inspiration (%)` | Fraction of inspiration phase that is mandatory |
-| `Support Window (%)` | Fraction of inspiration/expiration allocated to support |
-| `Synch Window (%)` | Fraction of inspiration/expiration allocated to synchronization |
-
-The UI layer solves the timing equations and writes the eight absolute durations to the HLC. For example:
-
-```
-Cycle Time          = 60 / RR
-Inspiration Time    = Cycle Time × I / (I + E)
-Expiration Time     = Cycle Time × E / (I + E)
-Time_Insp_Pause     = Cycle Time × (Insp Pause % / 100)
-Active Insp Time    = Inspiration Time − Time_Insp_Pause
-Time_Insp_NonTrig   = Active Insp Time × (Non-trig % / 100)
-... etc.
-```
-
-> **Rationale**: Containing all parameter interpretation and preference adaptation in the UI layer keeps the HLC deterministic and testable. Different user interfaces (touchscreen, remote control, automated protocols) can each implement their own parameter sets and conversion logic while driving the same HLC through a single, well-defined interface of eight state times plus pressure/flow setpoints.
-
----
-
 ### HLC Parameters
 
 #### Pressure Parameters
@@ -392,12 +363,97 @@ When the HLC transitions states and modifies setpoints:
 
 ---
 
+## User Interface Layer (Parameter Conversion)
+
+### Purpose
+
+The **User Interface (UI) layer** sits above the HLC and is responsible for translating clinician-friendly parameters into the absolute state times and setpoints expected by the HLC. The HLC itself never performs these conversions — it only consumes the resulting values.
+
+This separation ensures that:
+- The HLC remains a **simple, deterministic state machine** operating on absolute times.
+- All interpretation of user preferences is **contained in the UI layer**.
+- Different user interfaces (touchscreen, remote control, automated protocols) can each implement their own parameter sets and conversion logic while driving the same HLC through a single, well-defined interface.
+
+### User-Facing Parameters
+
+The UI layer accepts clinician-friendly parameters such as:
+
+| User-Facing Parameter | Description |
+|----------------------|-------------|
+| `Respiratory Rate (RR)` | Breaths per minute → total cycle time = 60 / RR seconds |
+| `I:E Ratio` | Inspiration-to-expiration ratio → splits the cycle time between the two phases |
+| `Inspiratory Pause (%)` | Fraction of cycle time allocated to inspiratory pause |
+| `Expiratory Pause (%)` | Fraction of cycle time allocated to expiratory pause |
+| `Non-triggerable Inspiration (%)` | Fraction of inspiration phase that is mandatory |
+| `Support Window (%)` | Fraction of inspiration/expiration allocated to support |
+| `Synch Window (%)` | Fraction of inspiration/expiration allocated to synchronization |
+| `Tidal Volume (Vt)` | Target volume per breath |
+| `FiO2` | Fraction of inspired oxygen |
+| `Inspiratory Pressure` | Target pressure during inspiration |
+| `PEEP` | Positive end-expiratory pressure |
+| `Pressure Limit` | Maximum allowed airway pressure |
+
+### Timing Equations
+
+The UI layer solves the timing equations and writes the eight absolute durations to the HLC:
+
+```
+Cycle Time              = 60 / RR
+Inspiration Time        = Cycle Time × I / (I + E)
+Expiration Time         = Cycle Time × E / (I + E)
+
+Time_Insp_Pause         = Inspiration Time × (Insp Pause % / 100)
+Active Insp Time        = Inspiration Time − Time_Insp_Pause
+Time_Insp_NonTrig       = Active Insp Time × (Non-trig % / 100)
+Time_Insp_Support       = Active Insp Time × (Support % / 100)
+Time_Insp_Synch         = Active Insp Time × (Synch % / 100)
+
+Time_Exp_Pause          = Expiration Time × (Exp Pause % / 100)
+Active Exp Time         = Expiration Time − Time_Exp_Pause
+Time_Exp_NonTrig        = Active Exp Time × (Non-trig % / 100)
+Time_Exp_Support        = Active Exp Time × (Support % / 100)
+Time_Exp_Synch          = Active Exp Time × (Synch % / 100)
+
+Insufflation Flow       = Vt / Active Insp Time
+```
+
+The UI layer also computes the initial insufflation flow setpoint from the tidal volume and active inspiration time, and passes pressure/flow setpoints alongside the timing values.
+
+### Ventilation Mode Presets
+
+Different ventilation modes are implemented by the UI layer as **parameter presets** — specific combinations of the user-facing parameters that produce the desired timing pattern:
+
+| Mode | Key UI Settings |
+|------|----------------|
+| **Volume Control (VC)** | Non-trig = 100%, Support = 0%, Synch = 0% → fully time-triggered |
+| **Assist Control (AC)** | Non-trig backup timing, Exp Synch window active for patient triggering |
+| **Pressure Support (PSV)** | Non-trig minimal, Support + Synch active → patient-triggered & cycled |
+| **SIMV** | Non-trig for mandatory breaths, Support windows for spontaneous breaths |
+
+The HLC sees only the resulting absolute times and has no concept of "mode" — mode selection is entirely a UI layer concern.
+
+### Design Benefits
+
+1. **HLC simplicity**: The state machine has no conditional parameter logic, only countdown timers and synchronization events.
+2. **Testability**: HLC can be tested with known absolute times without needing a UI.
+3. **Flexibility**: New ventilation modes or parameter schemes can be added in the UI layer without changing the HLC.
+4. **Multi-UI support**: Touchscreen, web interface, serial console, or automated protocol engines can all drive the same HLC.
+
+---
+
 ## Communication Between Layers
 
+### UI Layer → HLC (Configuration)
+- Eight absolute state durations (Time_Insp_NonTrig, …, Time_Exp_Pause)
+- Pressure setpoints (Inspiratory Pressure, PEEP, Pressure Limit, Support Pressures)
+- Flow setpoints (Insufflation Flow, Max Inspiratory Flow, Bias Flow)
+- Trigger thresholds (flow and pressure)
+- Tidal Volume target
+
 ### HLC → LLC (Setpoints)
-- Pressure setpoints
-- Flow setpoints
-- Trigger thresholds
+- Pressure setpoints (state-dependent, updated on each HLC state transition)
+- Flow setpoints (including breath-to-breath adapted insufflation flow)
+- Trigger thresholds (adjusted per HLC state)
 - All parameters listed in LLC section
 
 ### LLC → HLC (Signals)
@@ -414,31 +470,28 @@ When the HLC transitions states and modifies setpoints:
 
 ## Example Ventilation Modes
 
-This architecture can implement various clinical ventilation modes by configuring the 8-state timing and parameters:
+This architecture can implement various clinical ventilation modes. The **UI layer** selects the appropriate parameter preset and solves the timing equations; the **HLC** receives only the resulting absolute times.
 
 ### Volume Control (VC)
-- Insp Non-trig: Delivers full breath
-- Insp Support: 0 time (skipped)
-- Insp Synch: 0 time (skipped)
-- Insp Pause: Optional (for plateau measurement)
-- Exp states: Fixed timing
+- UI sets: Non-trig = 100% of active time, Support = 0%, Synch = 0%
+- HLC sees: Time_Insp_NonTrig = full active insp time, Time_Insp_Support = 0, Time_Insp_Synch = 0
+- Insp Pause: Optional (UI allocates fraction for plateau measurement)
+- Exp states: Fixed timing calculated by UI from RR and I:E ratio
 - **Result**: Time-triggered, volume-cycled mandatory breaths
 
 ### Assist Control (AC)
-- Insp Non-trig: Backup mandatory breath timing
-- Exp Synch: Active (allows patient triggering)
+- UI sets: Non-trig with backup timing, Exp Synch window > 0
+- HLC sees: Time_Exp_Synch > 0, allowing patient triggering during expiration
 - **Result**: Patient can trigger breaths, but gets full support
 
 ### Pressure Support Ventilation (PSV)
-- Insp Support: Active with support pressure
-- Insp Synch: Active (patient cycles off)
-- Exp Synch: Active (patient cycles on)
-- Non-trig states: Minimal or backup only
+- UI sets: Support and Synch windows active, Non-trig minimal (safety backup)
+- HLC sees: Time_Insp_Support and Time_Insp_Synch > 0, Time_Exp_Synch > 0
 - **Result**: Fully patient-triggered and cycled breaths with pressure support
 
 ### SIMV (Synchronized Intermittent Mandatory Ventilation)
-- Combination of mandatory (Non-trig) and supported (Support) breaths
-- Synch states active to coordinate with patient effort
+- UI configures combination of mandatory (Non-trig) and supported (Support) timing
+- HLC sees appropriate time distribution; Synch states coordinate with patient effort
 
 ---
 
@@ -488,5 +541,4 @@ This architecture can implement various clinical ventilation modes by configurin
 
 | Date | Version | Changes |
 |------|---------|---------|
-| 2026-02-01 | 1.0 | Initial documentation of three-layer architecture |
-
+| 2026-02-01 | 1.0 | Initial documentation of three-layer architecture || 2026-03-23 | 1.1 | Added User Interface Layer; clarified HLC operates on absolute times only; moved timing equations to UI layer; updated communication and mode descriptions |
