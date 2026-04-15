@@ -86,17 +86,16 @@ The operating point is determined by the combination of `PawSet` (set airway pre
 - Controls airway pressure using expiratory valve and bias flow
 - Releases pressure/flow from the patient
 - Controls pressure using expiratory valve
-- Maintains the pressure setpoint (`PawSet`) provided by HLC (which writes the PEEP value during expiration)
+- Maintains PEEP (baseline pressure)
 
 ### Parameters (Set by HLC)
-
-The LLC has a **single pressure setpoint** (`PawSet`). The HLC decides what value to write depending on the current ventilation state — during inspiration it writes the inspiratory pressure, during expiration it writes PEEP. The LLC has no concept of PEEP or inspiratory pressure; it only sees `PawSet`.
 
 | Parameter | Alias | Description |
 |-----------|-------|-------------|
 | `FiO2` | | Fraction of inspired oxygen (0.21 - 1.0) |
-| `Set Airway Pressure` | `PawSet` | Target airway pressure (single setpoint, meaning determined by HLC state) |
+| `Set Airway Pressure` | `PawSet` | Target pressure during insufflation |
 | `Max Inspiratory Flow` | `FlowSet` | Maximum allowed inspiratory flow |
+| `Exsufflation Pressure` | (derived from PEEP by HLC) | Target pressure during exsufflation |
 | `Bias Flow` | `FlowBias` | Continuous flow maintained during exsufflation |
 | `Flow Trigger Threshold` | | Flow change required to detect patient effort |
 | `Pressure Trigger Threshold` | | Pressure change required to detect patient effort |
@@ -115,8 +114,8 @@ The LLC transitions between insufflation and exsufflation based on:
 2. **Setpoint-Induced Transitions**
    - When HLC modifies setpoints, trigger criteria may suddenly be fulfilled
    - No explicit commands needed — purely reactive behavior
-   - Example: HLC writes PawSet = PEEP (5 cmH₂O) and reduces flow → LLC shifts to exsufflation
-   - Example: HLC writes PawSet = high value and FlowSet = 0 → LLC locks in insufflation (used for inspiratory pause, see below)
+   - Example: HLC sets PEEP = 5 cmH₂O → LLC shifts to exsufflation to reach this pressure
+   - Example: HLC sets PEEP = 100 cmH₂O → LLC enters exsufflation mode (used for inspiratory pause lock, see below)
 
 ### Communication to HLC
 
@@ -329,23 +328,23 @@ Hold the delivered volume without adding or releasing gas, allowing:
 
 ### Mechanism
 
-During **Insp Pause** state, the HLC "locks" the LLC into the **insufflation** state by manipulating setpoints:
+During **Insp Pause** state, the HLC "locks" the system by manipulating setpoints:
 
 ```
-PawSet → 100 cmH2O   (high target — LLC stays in insufflation)
-Max Inspiratory Flow (FlowSet) → 0   (no gas delivered)
+Bias Flow → 0
+Exsufflation Pressure (PEEP) → 100 cmH2O
 ```
 
 **Effect**:
-1. **High PawSet** → LLC remains in insufflation mode (actual airway pressure is well below 100 cmH₂O, so no active pressure regulation occurs)
-2. **Zero FlowSet** → No inspiratory gas is delivered despite being in insufflation
-3. **Expiratory valve not commanded to open** → No gas escapes (LLC is not in exsufflation)
+1. **Zero bias flow** → No gas is added by the insufflation controllers
+2. **Very high PEEP setpoint** → LLC enters exsufflation mode
+3. **High PEEP prevents valve opening** → Expiratory valve stays closed (actual pressure << 100 cmH2O)
 4. **Result**: System is mechanically "locked"
-   - No gas flows in (flow setpoint is zero)
-   - No gas escapes (expiratory valve stays closed)
+   - No gas flows in (insufflation inactive)
+   - No gas escapes (expiratory valve closed)
    - Volume is held constant
 
-This elegant solution uses the existing control structure without requiring special "pause mode" logic in the LLC. The pause is simply the extreme point on the flow–pressure continuum: maximum pressure target with zero flow.
+This elegant solution uses the existing control structure without requiring special "pause mode" logic in the LLC.
 
 ---
 
@@ -381,8 +380,7 @@ The HLC never sends explicit commands to the LLC. Instead, it controls behavior 
 When the HLC transitions states and modifies setpoints:
 - LLC trigger criteria may suddenly become fulfilled
 - LLC automatically transitions states (no command needed)
-- Example: HLC writes PawSet = PEEP and FlowSet = 0 → LLC transitions to exsufflation
-- Example: HLC writes PawSet = 100 cmH₂O and FlowSet = 0 → LLC locks in insufflation (pause)
+- Example: Setting PEEP to 100 cmH2O forces LLC into exsufflation mode
 
 ---
 
@@ -488,11 +486,10 @@ The HLC sees only the resulting absolute times and has no concept of "mode" — 
 - Tidal Volume target
 
 ### HLC → LLC (Setpoints)
-- `PawSet` — single pressure setpoint (HLC writes inspiratory pressure or PEEP depending on state)
-- `FlowSet` — max inspiratory flow (including zero for pause/expiration)
-- `FlowBias` — bias flow
+- Pressure setpoints (state-dependent, updated on each HLC state transition)
+- Flow setpoints (including breath-to-breath adapted insufflation flow)
 - Trigger thresholds (adjusted per HLC state)
-- `FiO2`
+- All parameters listed in LLC section
 
 ### LLC → HLC (Signals)
 - State change events (insufflation ↔ exsufflation)
@@ -592,4 +589,3 @@ This architecture can implement various clinical ventilation modes. The **UI lay
 | 2026-03-23 | 1.1 | Added User Interface Layer; clarified HLC operates on absolute times only; moved timing equations to UI layer; updated communication and mode descriptions |
 | 2026-03-24 | 1.2 | Fixed title to reflect layered (not three-layer) architecture; corrected pause duration description to match absolute-times model |
 | 2026-03-24 | 1.3 | Synced with manually updated PPTX: "one-mode" framing; added Manoeuvres section; added flow–pressure continuum to LLC; reframed insufflation/exsufflation descriptions; added LLC absolute pressure limit note; updated parameter names/aliases; added trigger footnote to setpoint table; strengthened safety priority statement; added execution rate table; added Layer 1 lookup-table and hardware-driver details |
-| 2026-03-24 | 1.4 | Corrected LLC pressure model: single PawSet (no separate PEEP to LLC); HLC selects pressure value per state; rewrote inspiratory pause to lock in insufflation (high PawSet + zero FlowSet); restructured setpoint table |
