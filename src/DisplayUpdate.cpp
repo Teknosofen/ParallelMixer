@@ -45,13 +45,12 @@ void updateDisplay() {
       renderer.drawControllerMode(modeWithChannel);
       wifiServer.updateMode(modeWithChannel);
 
-      renderer.drawFlow(String(sensorData_bus0.sfm3505_air_flow, 3) + " slm Air");
-      renderer.drawFlow2(String(sensorData_bus1.sfm3505_air_flow, 3) + " slm Air");
-      String pressureStr = "P0: " + String(sensorData_bus0.supply_pressure, 1) + "kPa LP: " +
-                           String(getELVH_Pressure(), 1) + " " +
-                           String(getELVH_Temperature(), 1) + " C";
-      renderer.drawPressure(pressureStr);
-      renderer.drawPressure2("P1: " + String(sensorData_bus1.supply_pressure, 1) + " kPa");
+      renderer.drawFlow(String(getDisplayedAirFlow(), 3) + " slm Air");
+      renderer.drawFlow2(String(getDisplayedO2Flow(), 3) + " slm O2");
+      renderer.drawPressure("P0: " + String(sensorData_bus0.supply_pressure, 1) + " kPa");
+      renderer.drawPressure2(String(sensorData_bus1.supply_pressure, 1) + " kPa");
+      renderer.drawAirwayPressure(String(getELVH_Pressure(), 1) + " mbar  " +
+                                  String(getELVH_Temperature(), 1) + " C");
       renderer.drawValveCtrlSignal(String(actuator.getValveControlSignal()));
       renderer.drawCurrent(String(muxRouter.getCurrent(sysConfig.mux_channel), 3) + " A");
       renderer.drawWiFiStatusDot(wifiServer.hasClients());

@@ -13,8 +13,8 @@ enum MuxChannel : uint8_t {
   MUX_AIR_VALVE = 1,  // Air valve
   MUX_O2_VALVE  = 2,  // O2 valve
   MUX_EXP_VALVE = 3,  // Expiratory valve
-  MUX_NC        = 4,  // Not Connected / Reserved
-  MUX_BLOWER    = 5   // Blower
+  MUX_BLOWER    = 4,  // Blower (local PWM on GPIO21 + serial to addr 4)
+  MUX_AUX       = 5   // Auxiliary serial address (no local hardware)
 };
 
 // Get human-readable name for MUX channel
@@ -24,8 +24,8 @@ inline const char* getMuxChannelName(uint8_t channel) {
     case MUX_AIR_VALVE: return "AirValve";
     case MUX_O2_VALVE:  return "O2Valve";
     case MUX_EXP_VALVE: return "ExpValve";
-    case MUX_NC:        return "NC";
-    case MUX_BLOWER:    return "Blower";
+    case MUX_BLOWER:    return "Blower(PWM)";
+    case MUX_AUX:       return "Aux";
     default:            return "Unknown";
   }
 }

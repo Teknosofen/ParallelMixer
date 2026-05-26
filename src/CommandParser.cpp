@@ -1,6 +1,7 @@
 #include "CommandParser.hpp"
 #include "ActuatorControl.hpp"
 #include "VentilatorController.hpp"
+#include "main.hpp"
 
 CommandParser::CommandParser() 
   : _command_complete(false), _context(nullptr) {
@@ -64,6 +65,7 @@ void CommandParser::sendError() {
 }
 
 void CommandParser::printHelp() {
+  Serial.println(parallelVerLbl);
   Serial.println("Available commands:");
   Serial.println("-------------------");
   Serial.println("T for GUI/serial output interval [us] int");
@@ -77,7 +79,7 @@ void CommandParser::printHelp() {
   Serial.println("Verbose data: dP, Flow, SupplyP, Fused Flow");
   Serial.println("Z zeroes controller integrator");
   Serial.println("E selects Ext (1 default) 12 bit / Int (0) 10 bit PWM");
-  Serial.println("F for flow ref value [L/min] float");
+  Serial.println("F<air>[,<o2>] LLC flow setpoint [SLM] (vent OFF only, see Local section)");
   Serial.println("I for integral const [-] float");
   Serial.println("P for proportional const [-] float");
   Serial.println("D for derivative const [-] float");
@@ -91,7 +93,7 @@ void CommandParser::printHelp() {
   Serial.println("  Example: W0.1,10,20,log (0.1-10Hz in 20s, logarithmic)");
   Serial.println("V for manual setting of valve output [%], float 0.0-100.0");
   Serial.println("M for MUX channel selection (0-5)");
-  Serial.println("  0=Direct, 1=AirValve, 2=O2Valve, 3=ExpValve, 4=NC, 5=Blower");
+  Serial.println("  0=Direct, 1=AirValve, 2=O2Valve, 3=ExpValve, 4=Blower(PWM), 5=Aux");
   Serial.println("! lists current settings");
   Serial.println();
   Serial.println("Ventilator commands:");
@@ -125,7 +127,11 @@ void CommandParser::printHelp() {
   Serial.println("-------------------");
   Serial.println("LE1/LE0 enable/disable local valve control (LLC)");
   Serial.println("LS print LLC status and configuration");
-  Serial.println("LF<air>[,<o2>] LLC manual flow test [SLM]");
+  Serial.println("LM print flow source modes; LMA/LMO/LMB <0|1> set source");
+  Serial.println("   0 = ESP local PI loop (sends V), 1 = remote motor CPU (sends F)");
+  Serial.println("   Settings persist to flash (NVS). Modes shown in LS output.");
+  Serial.println("F<air>[,<o2>] flow setpoint via LLC (vent OFF only)");
+  Serial.println("LF<air>[,<o2>] LLC manual flow test [SLM]"); 
   Serial.println("  LF10      = 10 SLM air, 0 O2");
   Serial.println("  LF20,5    = 20 SLM air, 5 SLM O2");
   Serial.println("  LF        = show current test status");
@@ -153,9 +159,10 @@ void CommandParser::printSettings(const SystemConfig& config, int controller_mod
                                   float valve_signal, uint8_t mux_channel,
                                   float sweep_start, float sweep_stop,
                                   float sweep_time, bool sweep_log) {
+  Serial.println(parallelVerLbl);
   Serial.printf("T= %lu us (GUI/serial output)\n", config.delta_t);
   Serial.printf("X= %lu us (control execution)\n", config.control_interval);
-  Serial.printf("F= %.2f L/min\n", config.digital_flow_reference);
+  Serial.printf("F(legacy)= %.2f L/min  (use top-level F via LLC for flow setpoints; see LS)\n", config.digital_flow_reference);
   Serial.printf("Q= %d\n", config.quiet_mode);
   Serial.printf("M= %d (%s)\n", mux_channel, getMuxChannelName(mux_channel));
   Serial.printf("C= %d\n", controller_mode);

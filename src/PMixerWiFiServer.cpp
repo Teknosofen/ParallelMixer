@@ -1,5 +1,6 @@
 #include "PMixerWiFiServer.hpp"
 #include "VentilatorController.hpp"
+#include "LocalValveController.hpp"
 #include "chart_js_min_gz.h"
 
 WebServer server(80);
@@ -95,6 +96,10 @@ void PMixerWiFiServer::updatePressure2(float pressure2) {
     _currentPressure2 = pressure2;
 }
 
+void PMixerWiFiServer::updateMeasuredO2(float percentO2) {
+    _currentMeasuredO2 = percentO2;
+}
+
 void PMixerWiFiServer::updateMode(const String& mode) {
     _currentMode = mode;
 }
@@ -175,6 +180,43 @@ void PMixerWiFiServer::setupWebServer() {
     server.on("/dataBuffer", [this]() { handleDataBuffer(); });
     server.on("/ventilator", [this]() { handleVentilatorSettings(); });
     server.on("/ventilator/set", HTTP_POST, [this]() { handleVentilatorSet(); });
+    server.on("/flowsource", [this]() {
+        // GET (or POST) with args: air=0|1, o2=0|1, blw=0|1. Returns current state JSON.
+        if (_localValveCtrl) {
+            bool changed = false;
+            if (server.hasArg("air")) {
+                _localValveCtrl->setAirFlowSource(
+                    server.arg("air").toInt() ? FlowControlSource::REMOTE_F : FlowControlSource::LOCAL_PI);
+                changed = true;
+            }
+            if (server.hasArg("o2")) {
+                _localValveCtrl->setO2FlowSource(
+                    server.arg("o2").toInt() ? FlowControlSource::REMOTE_F : FlowControlSource::LOCAL_PI);
+                changed = true;
+            }
+            if (server.hasArg("blw")) {
+                _localValveCtrl->setBlowerFlowSource(
+                    server.arg("blw").toInt() ? FlowControlSource::REMOTE_F : FlowControlSource::LOCAL_PI);
+                changed = true;
+            }
+            if (changed) {
+                _localValveCtrl->reset();
+                if (_saveSettings) _saveSettings();
+            }
+            FlowSourceConfig fs = _localValveCtrl->getFlowSource();
+            FlowSourceStale  st = _localValveCtrl->getFlowStale();
+            String j = "{\"air\":" + String((int)fs.air) +
+                       ",\"o2\":"  + String((int)fs.o2)  +
+                       ",\"blw\":" + String((int)fs.blower) +
+                       ",\"airStale\":" + String((int)(fs.air==FlowControlSource::REMOTE_F && st.air)) +
+                       ",\"o2Stale\":"  + String((int)(fs.o2==FlowControlSource::REMOTE_F && st.o2)) +
+                       ",\"blwStale\":" + String((int)(fs.blower==FlowControlSource::REMOTE_F && st.blower)) +
+                       "}";
+            server.send(200, "application/json", j);
+        } else {
+            server.send(500, "application/json", "{\"error\":\"No LLC\"}");
+        }
+    });
     // Serve Chart.js from PROGMEM (gzip compressed) for offline operation
     server.on("/chart.min.js", []() {
         server.sendHeader("Content-Encoding", "gzip");
@@ -359,6 +401,21 @@ String PMixerWiFiServer::generateDataJson() {
     json += "\"temperature\":" + String(_currentTemperature, 1) + ",";
     json += "\"flow2\":" + String(_currentFlow2, 2) + ",";
     json += "\"pressure2\":" + String(_currentPressure2, 2) + ",";
+    // "fiO2" carries the *measured* FDO2 value (top-of-page display).
+    // "targetFiO2" stays available via /ventilator-data for the settings panel.
+    json += "\"fiO2\":" + String(_currentMeasuredO2, 1) + ",";
+    json += "\"targetFiO2\":" + String(_ventTargetFiO2 * 100.0f, 0) + ",";
+    if (_localValveCtrl) {
+        FlowSourceConfig fs = _localValveCtrl->getFlowSource();
+        FlowSourceStale  st = _localValveCtrl->getFlowStale();
+        json += "\"fsrcAir\":" + String((int)fs.air) + ",";
+        json += "\"fsrcO2\":"  + String((int)fs.o2)  + ",";
+        json += "\"fsrcBlw\":" + String((int)fs.blower) + ",";
+        json += "\"flowStale\":" + String((int)_localValveCtrl->anyFlowStale()) + ",";
+        json += "\"airStale\":" + String((int)(fs.air==FlowControlSource::REMOTE_F && st.air)) + ",";
+        json += "\"o2Stale\":"  + String((int)(fs.o2==FlowControlSource::REMOTE_F && st.o2)) + ",";
+        json += "\"blwStale\":" + String((int)(fs.blower==FlowControlSource::REMOTE_F && st.blower)) + ",";
+    }
     json += "\"mode\":\"" + _currentMode + "\",";
     json += "\"timestamp\":" + String(millis());
     json += "}";
@@ -551,8 +608,8 @@ String PMixerWiFiServer::generateHtmlPage() {
         }
         .chart-container {
             position: relative;
-            height: 400px;
-            margin-bottom: 20px;
+            height: 220px;
+            margin-bottom: 12px;
         }
         button {
             background-color: #0078D7;
@@ -671,12 +728,56 @@ String PMixerWiFiServer::generateHtmlPage() {
                 <div class="status-label">Current</div>
                 <div class="status-value" id="currentValue">--</div>
             </div>
+            <div class="status-card">
+                <div class="status-label">FiO2 measured (%)</div>
+                <div class="status-value" id="fiO2Value">--</div>
+            </div>
         </div>
         
         <!-- Main view: Chart -->
         <div id="mainView">
             <div class="chart-container">
-                <canvas id="dataChart"></canvas>
+                <canvas id="chartAirway"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="chartFlows"></canvas>
+            </div>
+            <div class="chart-container">
+                <canvas id="chartSupply"></canvas>
+            </div>
+
+            <!-- Flow control source selection (per actuator) -->
+            <div id="flowSourcePanel" style="background:#1e1e1e; border:1px solid #333; border-radius:8px; padding:10px 14px; margin:12px 0;">
+                <div style="display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:10px;">
+                    <b style="color:#0078D7;">Flow control source</b>
+                    <span id="flowStaleBadge" style="display:none; background:#a00; color:#fff; padding:3px 8px; border-radius:4px; font-size:12px;">REMOTE FLOW STALE</span>
+                </div>
+                <div style="display:flex; gap:18px; flex-wrap:wrap; margin-top:8px;">
+                    <label style="display:flex; align-items:center; gap:6px;">Air:
+                        <select id="fsrcAirSel" onchange="setFlowSource()">
+                            <option value="0">ESP (local PI)</option>
+                            <option value="1">MotorCPU (remote F)</option>
+                        </select>
+                        <span id="fsrcAirStale" style="color:#ff5555; display:none;">⚠ stale</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:6px;">O2:
+                        <select id="fsrcO2Sel" onchange="setFlowSource()">
+                            <option value="0">ESP (local PI)</option>
+                            <option value="1">MotorCPU (remote F)</option>
+                        </select>
+                        <span id="fsrcO2Stale" style="color:#ff5555; display:none;">⚠ stale</span>
+                    </label>
+                    <label style="display:flex; align-items:center; gap:6px;">Blower:
+                        <select id="fsrcBlwSel" onchange="setFlowSource()">
+                            <option value="0">ESP (local PI)</option>
+                            <option value="1">MotorCPU (remote F)</option>
+                        </select>
+                        <span id="fsrcBlwStale" style="color:#ff5555; display:none;">⚠ stale</span>
+                    </label>
+                </div>
+                <div style="font-size:12px; color:#aaa; margin-top:6px;">
+                    Changes are saved to flash and survive reboot.
+                </div>
             </div>
 
             <div class="button-container">
@@ -738,11 +839,11 @@ String PMixerWiFiServer::generateHtmlPage() {
                 </div>
                 <div class="status-card">
                     <div class="status-label">Max Flow (slm)</div>
-                    <input class="settings-input" type="number" id="ventMF" step="1" min="1" max="120">
+                    <input class="settings-input" type="number" id="ventMF" step="1" min="1" max="200">
                 </div>
                 <div class="status-card">
                     <div class="status-label">Total Flow (slm)</div>
-                    <input class="settings-input" type="number" id="ventTF" step="1" min="1" max="120">
+                    <input class="settings-input" type="number" id="ventTF" step="1" min="1" max="200">
                 </div>
                 <div class="status-card">
                     <div class="status-label">Vol Control</div>
@@ -859,123 +960,92 @@ String PMixerWiFiServer::generateHtmlPage() {
             pressure2: []
         };
 
-        // Chart setup
-        const ctx = document.getElementById('dataChart').getContext('2d');
-        const chart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: [],
-                datasets: [
-                    {
-                        label: 'Flow (Bus 0)',
-                        data: [],
-                        borderColor: '#0078D7',
-                        backgroundColor: 'rgba(0, 120, 215, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2
+        // Chart setup — three separate panels sharing the time axis
+        function makeChart(canvasId, title, yLabel, datasets) {
+            const ctx = document.getElementById(canvasId).getContext('2d');
+            return new Chart(ctx, {
+                type: 'line',
+                data: { labels: [], datasets: datasets },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top' },
+                        title: { display: true, text: title }
                     },
-                    {
-                        label: 'Press (Bus 0)',
-                        data: [],
-                        borderColor: '#FF6B6B',
-                        backgroundColor: 'rgba(255, 107, 107, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Low Pressure',
-                        data: [],
-                        borderColor: '#FF69B4',
-                        backgroundColor: 'rgba(255, 105, 180, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Temperature',
-                        data: [],
-                        borderColor: '#9370DB',
-                        backgroundColor: 'rgba(147, 112, 219, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Valve Signal',
-                        data: [],
-                        borderColor: '#4ECDC4',
-                        backgroundColor: 'rgba(78, 205, 196, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Current',
-                        data: [],
-                        borderColor: '#FFA500',
-                        backgroundColor: 'rgba(255, 165, 0, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2
-                    },
-                    {
-                        label: 'Flow (Bus 1)',
-                        data: [],
-                        borderColor: '#00BFFF',
-                        backgroundColor: 'rgba(0, 191, 255, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2,
-                        borderDash: [5, 3]
-                    },
-                    {
-                        label: 'Press (Bus 1)',
-                        data: [],
-                        borderColor: '#FF4500',
-                        backgroundColor: 'rgba(255, 69, 0, 0.1)',
-                        tension: 0.3,
-                        pointRadius: 0,
-                        borderWidth: 2,
-                        borderDash: [5, 3]
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                interaction: {
-                    mode: 'index',
-                    intersect: false,
-                },
-                plugins: {
-                    legend: {
-                        position: 'top',
-                    },
-                    title: {
-                        display: true,
-                        text: 'Real-time Data'
-                    }
-                },
-                scales: {
-                    x: {
-                        display: true,
-                        title: {
-                            display: true,
-                            text: 'Time (seconds)'
-                        }
-                    },
-                    y: {
-                        display: true,
-                        title: {
-                            display: true,
-                            text: 'Value'
-                        }
+                    scales: {
+                        x: { display: true, title: { display: true, text: 'Time (s)' } },
+                        y: { display: true, title: { display: true, text: yLabel } }
                     }
                 }
+            });
+        }
+
+        const chartAirway = makeChart('chartAirway', 'Airway Pressure', 'mbar', [
+            {
+                label: 'Airway Pressure',
+                data: [],
+                borderColor: '#FF69B4',
+                backgroundColor: 'rgba(255, 105, 180, 0.1)',
+                tension: 0.3, pointRadius: 0, borderWidth: 2
             }
-        });
+        ]);
+
+        const chartFlows = makeChart('chartFlows', 'Flows', 'slm', [
+            {
+                label: 'Flow (Bus 0)',
+                data: [],
+                borderColor: '#0078D7',
+                backgroundColor: 'rgba(0, 120, 215, 0.1)',
+                tension: 0.3, pointRadius: 0, borderWidth: 2
+            },
+            {
+                label: 'Flow (Bus 1)',
+                data: [],
+                borderColor: '#00BFFF',
+                backgroundColor: 'rgba(0, 191, 255, 0.1)',
+                tension: 0.3, pointRadius: 0, borderWidth: 2,
+                borderDash: [5, 3]
+            }
+        ]);
+
+        const chartSupply = makeChart('chartSupply', 'Supply Pressure', 'kPa', [
+            {
+                label: 'Press (Bus 0)',
+                data: [],
+                borderColor: '#FF6B6B',
+                backgroundColor: 'rgba(255, 107, 107, 0.1)',
+                tension: 0.3, pointRadius: 0, borderWidth: 2
+            },
+            {
+                label: 'Press (Bus 1)',
+                data: [],
+                borderColor: '#FF4500',
+                backgroundColor: 'rgba(255, 69, 0, 0.1)',
+                tension: 0.3, pointRadius: 0, borderWidth: 2,
+                borderDash: [5, 3]
+            }
+        ]);
+
+        const allCharts = [chartAirway, chartFlows, chartSupply];
+
+        // Flow source selection — guard so the periodic poll doesn't fight a user mid-edit
+        let flowSrcUserEditing = false;
+        async function setFlowSource() {
+            flowSrcUserEditing = true;
+            const air = document.getElementById('fsrcAirSel').value;
+            const o2  = document.getElementById('fsrcO2Sel').value;
+            const blw = document.getElementById('fsrcBlwSel').value;
+            try {
+                await fetch('/flowsource?air=' + air + '&o2=' + o2 + '&blw=' + blw);
+            } catch (e) {
+                console.error('flowsource set failed', e);
+            }
+            // Release the edit guard shortly after the request completes so the next /data poll
+            // can sync UI with the actual stored value.
+            setTimeout(() => { flowSrcUserEditing = false; }, 600);
+        }
 
         // Fetch buffered data (batch of multiple samples for high-speed updates)
         async function fetchData() {
@@ -994,6 +1064,24 @@ String PMixerWiFiServer::generateHtmlPage() {
                 // Update Bus 1 display values (from /data endpoint)
                 document.getElementById('flow2Value').textContent = currentData.flow2.toFixed(2);
                 document.getElementById('pressure2Value').textContent = currentData.pressure2.toFixed(2);
+                if (typeof currentData.fiO2 !== 'undefined') {
+                    document.getElementById('fiO2Value').textContent = currentData.fiO2.toFixed(1);
+                }
+                // Flow source modes + stale flags
+                if (typeof currentData.fsrcAir !== 'undefined') {
+                    const a = document.getElementById('fsrcAirSel');
+                    const o = document.getElementById('fsrcO2Sel');
+                    const b = document.getElementById('fsrcBlwSel');
+                    if (a && !flowSrcUserEditing) a.value = String(currentData.fsrcAir);
+                    if (o && !flowSrcUserEditing) o.value = String(currentData.fsrcO2);
+                    if (b && !flowSrcUserEditing) b.value = String(currentData.fsrcBlw);
+                }
+                if (typeof currentData.flowStale !== 'undefined') {
+                    document.getElementById('flowStaleBadge').style.display = currentData.flowStale ? 'inline-block' : 'none';
+                    document.getElementById('fsrcAirStale').style.display   = currentData.airStale ? 'inline' : 'none';
+                    document.getElementById('fsrcO2Stale').style.display    = currentData.o2Stale  ? 'inline' : 'none';
+                    document.getElementById('fsrcBlwStale').style.display   = currentData.blwStale ? 'inline' : 'none';
+                }
 
                 // If no new data points, skip processing
                 if (data.count === 0) {
@@ -1026,26 +1114,27 @@ String PMixerWiFiServer::generateHtmlPage() {
                     dataHistory.flow2.push(data.flow2[i]);
                     dataHistory.pressure2.push(data.pressure2[i]);
 
-                    // Add all points to chart
-                    chart.data.labels.push(timeInSeconds);
-                    chart.data.datasets[0].data.push(data.flow[i]);
-                    chart.data.datasets[1].data.push(data.pressure[i]);
-                    chart.data.datasets[2].data.push(data.lowPressure[i]);
-                    chart.data.datasets[3].data.push(data.temperature[i]);
-                    chart.data.datasets[4].data.push(data.valve[i]);
-                    chart.data.datasets[5].data.push(data.current[i]);
-                    chart.data.datasets[6].data.push(data.flow2[i]);
-                    chart.data.datasets[7].data.push(data.pressure2[i]);
+                    // Push into each of the three charts
+                    chartAirway.data.labels.push(timeInSeconds);
+                    chartAirway.data.datasets[0].data.push(data.lowPressure[i]);
+
+                    chartFlows.data.labels.push(timeInSeconds);
+                    chartFlows.data.datasets[0].data.push(data.flow[i]);
+                    chartFlows.data.datasets[1].data.push(data.flow2[i]);
+
+                    chartSupply.data.labels.push(timeInSeconds);
+                    chartSupply.data.datasets[0].data.push(data.pressure[i]);
+                    chartSupply.data.datasets[1].data.push(data.pressure2[i]);
                 }
 
-                // Trim chart to max points
-                while (chart.data.labels.length > maxPoints) {
-                    chart.data.labels.shift();
-                    chart.data.datasets.forEach(dataset => dataset.data.shift());
-                }
-
-                // Update chart once with all new data (batch update)
-                chart.update('none'); // No animation for smoother high-speed updates
+                // Trim each chart to max points
+                allCharts.forEach(c => {
+                    while (c.data.labels.length > maxPoints) {
+                        c.data.labels.shift();
+                        c.data.datasets.forEach(ds => ds.data.shift());
+                    }
+                    c.update('none');
+                });
             } catch (error) {
                 console.error('Error fetching data:', error);
             }
@@ -1067,22 +1156,23 @@ String PMixerWiFiServer::generateHtmlPage() {
                 dataHistory.flow2 = history.flow2 || [];
                 dataHistory.pressure2 = history.pressure2 || [];
 
-                // Populate chart with configured number of points
+                // Populate charts with configured number of points
                 const maxPoints = )rawhtml" + String(PMIXER_GRAPH_DISPLAY_POINTS) + R"rawhtml(;
                 const startIdx = Math.max(0, history.timestamps.length - maxPoints);
                 for (let i = startIdx; i < history.timestamps.length; i++) {
                     const timeInSeconds = (history.timestamps[i] / 1000).toFixed(1);
-                    chart.data.labels.push(timeInSeconds);
-                    chart.data.datasets[0].data.push(history.flow[i]);
-                    chart.data.datasets[1].data.push(history.pressure[i]);
-                    chart.data.datasets[2].data.push(history.lowPressure[i]);
-                    chart.data.datasets[3].data.push(history.temperature[i]);
-                    chart.data.datasets[4].data.push(history.valve[i]);
-                    chart.data.datasets[5].data.push(history.current[i]);
-                    chart.data.datasets[6].data.push(history.flow2 ? history.flow2[i] : 0);
-                    chart.data.datasets[7].data.push(history.pressure2 ? history.pressure2[i] : 0);
+                    chartAirway.data.labels.push(timeInSeconds);
+                    chartAirway.data.datasets[0].data.push(history.lowPressure[i]);
+
+                    chartFlows.data.labels.push(timeInSeconds);
+                    chartFlows.data.datasets[0].data.push(history.flow[i]);
+                    chartFlows.data.datasets[1].data.push(history.flow2 ? history.flow2[i] : 0);
+
+                    chartSupply.data.labels.push(timeInSeconds);
+                    chartSupply.data.datasets[0].data.push(history.pressure[i]);
+                    chartSupply.data.datasets[1].data.push(history.pressure2 ? history.pressure2[i] : 0);
                 }
-                chart.update();
+                allCharts.forEach(c => c.update());
             } catch (error) {
                 console.error('Error loading history:', error);
             }
@@ -1136,10 +1226,12 @@ String PMixerWiFiServer::generateHtmlPage() {
         // Clear data (both graph and save buffer)
         function clearData() {
             if (confirm('Clear all data (graph and save buffer)?')) {
-                // Clear chart display
-                chart.data.labels = [];
-                chart.data.datasets.forEach(dataset => dataset.data = []);
-                chart.update();
+                // Clear all three charts
+                allCharts.forEach(c => {
+                    c.data.labels = [];
+                    c.data.datasets.forEach(ds => ds.data = []);
+                    c.update();
+                });
                 // Clear data history for file saving
                 dataHistory.timestamps = [];
                 dataHistory.flow = [];

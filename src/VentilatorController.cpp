@@ -124,12 +124,12 @@ void VentilatorController::setTidalVolume(float mL) {
 }
 
 void VentilatorController::setMaxFlow(float slm) {
-    _config.maxInspFlow_slm = constrain(slm, 5.0f, 120.0f);
+    _config.maxInspFlow_slm = constrain(slm, 5.0f, 200.0f);
     if (_running) recalculateTiming();
 }
 
 void VentilatorController::setTotalFlow(float slm) {
-    _config.totalFlow_slm = constrain(slm, 1.0f, 120.0f);
+    _config.totalFlow_slm = constrain(slm, 1.0f, 200.0f);
     if (_running) recalculateTiming();
 }
 

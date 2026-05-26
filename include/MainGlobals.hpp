@@ -64,4 +64,12 @@ extern SensorData sensorData_bus1;
 extern bool sensorsInitialized;
 extern bool sensors_bus1_initialized;
 
+// Resolve the flow value to *display / publish* for the air and O2 channels,
+// honoring the per-channel FlowControlSource. For LOCAL_PI the local SFM3505
+// reading is returned; for REMOTE_F the latest MUX-reported actual flow is
+// returned (falling back to the local reading when the remote sample is
+// stale, so the UI still shows the physical sensor value if one is wired).
+float getDisplayedAirFlow();
+float getDisplayedO2Flow();
+
 #endif // MAIN_GLOBALS_HPP

@@ -3,11 +3,17 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <FS.h>
+// TFT_eSPI defines FS_NO_GLOBALS before including FS.h, which prevents
+// fs::FS from being aliased into the global namespace. WebServer.h needs
+// the global FS, so we re-introduce the alias here.
+using fs::FS;
 #include <WebServer.h>
 #include <vector>
 
 // Forward declaration
 class VentilatorController;
+class LocalValveController;
 
 // Compile-time configuration for graph display
 #ifndef PMIXER_GRAPH_DISPLAY_POINTS
@@ -36,6 +42,7 @@ public:
     void updateTemperature(float temperature);
     void updateFlow2(float flow2);       // Bus 1 flow
     void updatePressure2(float pressure2); // Bus 1 pressure
+    void updateMeasuredO2(float percentO2); // FDO2 sensor measured O2 [%]
 
     // Ventilator settings update - call from main to push ventilator data
     void updateVentilatorSettings(bool running, const char* state,
@@ -51,6 +58,14 @@ public:
     // Ventilator controller reference - enables web-based settings control
     void setVentilatorController(VentilatorController* vc) { _ventController = vc; }
 
+    // Local valve controller reference - enables web-based flow source selection
+    void setLocalValveController(LocalValveController* lvc) { _localValveCtrl = lvc; }
+
+    // Persisted-settings callback — invoked when a setting that must survive
+    // reboot (e.g. flow source) is changed via the web UI.
+    typedef void (*SaveSettingsCallback)();
+    void setSaveSettingsCallback(SaveSettingsCallback cb) { _saveSettings = cb; }
+
     // Configuration
     void setMaxDataPoints(int points) { _maxDataPoints = points; }
     
@@ -60,7 +75,9 @@ private:
     bool _running;
     int _maxDataPoints;
     VentilatorController* _ventController;
-    
+    LocalValveController* _localValveCtrl = nullptr;
+    SaveSettingsCallback  _saveSettings   = nullptr;
+
     // Current values
     float _currentFlow;
     float _currentPressure;
@@ -70,6 +87,7 @@ private:
     float _currentTemperature;
     float _currentFlow2;       // Bus 1 flow
     float _currentPressure2;   // Bus 1 pressure
+    float _currentMeasuredO2 = 0.0f; // FDO2 measured O2 [%]
     String _currentMode;
 
     // Ventilator settings

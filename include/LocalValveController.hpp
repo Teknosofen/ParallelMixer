@@ -114,6 +114,11 @@ public:
     /// Reset integrator state
     void reset();
 
+    /// Preset the integrator to a specific value. Useful for "ceiling" PIs
+    /// (e.g. pressure-limit) that should start saturated at the max output
+    /// and only retreat when the limit is threatened.
+    void presetIntegrator(float value);
+
     /// Run one PI step.  dt in seconds.
     /// Returns unclamped output (caller does min-select and then calls trackOutput).
     float update(float setpoint, float measurement, float dt);
@@ -372,6 +377,38 @@ struct LocalValveControllerConfig {
     uint8_t airMuxChannel;      // MUX address for air valve (default MUX_AIR_VALVE=1)
     uint8_t o2MuxChannel;       // MUX address for O2 valve  (default MUX_O2_VALVE=2)
     uint8_t expMuxChannel;      // MUX address for exp valve (default MUX_EXP_VALVE=3)
+    uint8_t blowerMuxChannel;   // MUX address for blower    (default MUX_BLOWER=4)
+};
+
+// ============================================================================
+// Flow control source — per-actuator selector between local PI loop on the
+// ESP and remote flow control performed by a downstream motor-controller CPU
+// over the serial MUX.
+//
+//   LOCAL_PI  : ESP runs the flow PI loop, sends V% (voltage) to MUX,
+//               reads flow from the on-board SFM3505 sensor.
+//   REMOTE_F  : ESP sends F<setpoint> to MUX, the motor-controller CPU runs
+//               its own flow loop. Flow measurement comes back over MUX as
+//               an 'F' frame from that address (used for telemetry only).
+//
+// Mode is independent per actuator (air, O2, blower). Exp valve is pressure-
+// controlled and unaffected.
+// ============================================================================
+enum class FlowControlSource : uint8_t {
+    LOCAL_PI = 0,
+    REMOTE_F = 1
+};
+
+struct FlowSourceConfig {
+    FlowControlSource air    = FlowControlSource::LOCAL_PI;
+    FlowControlSource o2     = FlowControlSource::LOCAL_PI;
+    FlowControlSource blower = FlowControlSource::LOCAL_PI;
+};
+
+struct FlowSourceStale {
+    bool air    = false;
+    bool o2     = false;
+    bool blower = false;
 };
 
 struct LocalValveControllerMeasurements {
@@ -424,6 +461,27 @@ public:
     void setEnabled(bool enabled) { _enabled = enabled; }
     bool isEnabled() const { return _enabled; }
 
+    /// Per-actuator flow control source selection.
+    /// Setting a channel to REMOTE_F means: send F<setpoint> on each update,
+    /// skip the local PI loop, and rely on the remote unit for flow control.
+    void setAirFlowSource(FlowControlSource s)    { _flowSrc.air = s; }
+    void setO2FlowSource(FlowControlSource s)     { _flowSrc.o2 = s; }
+    void setBlowerFlowSource(FlowControlSource s) { _flowSrc.blower = s; }
+    void setFlowSource(const FlowSourceConfig& s) { _flowSrc = s; }
+    FlowSourceConfig getFlowSource() const        { return _flowSrc; }
+    FlowControlSource getAirFlowSource() const    { return _flowSrc.air; }
+    FlowControlSource getO2FlowSource() const     { return _flowSrc.o2; }
+    FlowControlSource getBlowerFlowSource() const { return _flowSrc.blower; }
+
+    /// Stale-data flags for REMOTE_F mode (set externally based on MUX RX timestamps).
+    void setFlowStale(const FlowSourceStale& s) { _flowStale = s; }
+    FlowSourceStale getFlowStale() const         { return _flowStale; }
+    bool anyFlowStale() const {
+        return (_flowSrc.air == FlowControlSource::REMOTE_F && _flowStale.air) ||
+               (_flowSrc.o2  == FlowControlSource::REMOTE_F && _flowStale.o2)  ||
+               (_flowSrc.blower == FlowControlSource::REMOTE_F && _flowStale.blower);
+    }
+
     /// Main update — call at control rate (100 Hz).
     /// Reads setpoints, measurements, computes valve currents, sends to MUX.
     void update(const LocalValveControllerSetpoints& sp,
@@ -455,6 +513,10 @@ private:
     uint8_t _airMuxChannel;
     uint8_t _o2MuxChannel;
     uint8_t _expMuxChannel;
+    uint8_t _blowerMuxChannel;
+
+    FlowSourceConfig _flowSrc;
+    FlowSourceStale  _flowStale;
 
     /// Send current command to a valve via MUX
     void sendValveCurrent(uint8_t channel, float current_A);

@@ -189,16 +189,22 @@ void updateSerialOutput() {
   }
 
   // WiFi server: Bus 0 data
-  wifiServer.updateFlow(sensorData_bus0.sfm3505_air_flow);
+  wifiServer.updateFlow(getDisplayedAirFlow());
   wifiServer.updatePressure(sensorData_bus0.supply_pressure);
   wifiServer.updateLowPressure(getELVH_Pressure());
   wifiServer.updateTemperature(getELVH_Temperature());
   wifiServer.updateValveSignal(actuator.getValveControlSignal());
   wifiServer.updateCurrent(muxRouter.getCurrent(sysConfig.mux_channel));
 
-  // WiFi server: Bus 1 data
-  wifiServer.updateFlow2(sensorData_bus1.sfm3505_air_flow);
+  // WiFi server: Bus 1 data (O2 line — use O2-calibrated SFM3505 value)
+  wifiServer.updateFlow2(getDisplayedO2Flow());
   wifiServer.updatePressure2(sensorData_bus1.supply_pressure);
+
+  // WiFi server: measured O2 from FDO2 sensor (top-of-page FiO2 display)
+  wifiServer.updateMeasuredO2(fdo2Initialized
+      ? fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa,
+                                       fdo2Data.ambientPressure_mbar)
+      : 0.0f);
 
   // WiFi server: Ventilator settings
   VentilatorConfig cfg = ventilator.getConfig();
@@ -224,12 +230,12 @@ void updateSerialOutput() {
 // ============================================================================
 
 void bufferWiFiData() {
-  wifiServer.addDataPoint(sensorData_bus0.sfm3505_air_flow,
+  wifiServer.addDataPoint(getDisplayedAirFlow(),
                          sensorData_bus0.supply_pressure,
                          actuator.getValveControlSignal(),
                          muxRouter.getCurrent(sysConfig.mux_channel),
                          getELVH_Pressure(),
                          getELVH_Temperature(),
-                         sensorData_bus1.sfm3505_air_flow,
+                         getDisplayedO2Flow(),
                          sensorData_bus1.supply_pressure);
 }

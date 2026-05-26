@@ -3,6 +3,7 @@
 // Date: 2024
 
 #include <Arduino.h>
+#include <Preferences.h>
 #include "MainGlobals.hpp"
 #include "SensorPolling.hpp"
 #include "OutputFormatting.hpp"
@@ -70,6 +71,70 @@ static float llcManualMaxPressure_mbar = 9999.0f;  // No pressure limit in pure 
 static bool  llcBlowerTestActive = false;
 static float llcBlowerFlow_slm = 0.0f;
 static float llcBlowerMaxPressure_mbar = 40.0f;  // Default blower pressure limit
+
+// ----------------------------------------------------------------------------
+// Persistent settings (NVS via Preferences) — flow control source per actuator
+// ----------------------------------------------------------------------------
+static Preferences prefs;
+static const char* PREFS_NAMESPACE = "pmixer";
+static const uint32_t REMOTE_FLOW_STALE_MS = 200;  // MUX flow telemetry timeout
+
+static void loadFlowSourceFromNVS() {
+    if (!prefs.begin(PREFS_NAMESPACE, true)) return;  // read-only
+    FlowSourceConfig fs;
+    fs.air    = (FlowControlSource)prefs.getUChar("fsrc_air", 0);
+    fs.o2     = (FlowControlSource)prefs.getUChar("fsrc_o2",  0);
+    fs.blower = (FlowControlSource)prefs.getUChar("fsrc_blw", 0);
+    prefs.end();
+    localValveCtrl.setFlowSource(fs);
+}
+
+static void saveFlowSourceToNVS() {
+    if (!prefs.begin(PREFS_NAMESPACE, false)) return;  // read/write
+    FlowSourceConfig fs = localValveCtrl.getFlowSource();
+    prefs.putUChar("fsrc_air", (uint8_t)fs.air);
+    prefs.putUChar("fsrc_o2",  (uint8_t)fs.o2);
+    prefs.putUChar("fsrc_blw", (uint8_t)fs.blower);
+    prefs.end();
+}
+
+static const char* flowSrcName(FlowControlSource s) {
+    return (s == FlowControlSource::REMOTE_F) ? "REMOTE_F" : "LOCAL_PI";
+}
+
+// Update LLC measurements for one input flow channel based on the active source.
+// Returns the (selected) flow value and writes the stale flag.
+static float pickFlowForChannel(FlowControlSource src, uint8_t muxAddr,
+                                float localFlow, bool& outStale) {
+    if (src == FlowControlSource::REMOTE_F) {
+        outStale = muxRouter.isActualFlowStale(muxAddr, REMOTE_FLOW_STALE_MS);
+        float v = muxRouter.getActualFlow(muxAddr);
+        return outStale ? 0.0f : v;
+    }
+    outStale = false;
+    return localFlow;
+}
+
+// Public helpers (declared in MainGlobals.hpp) that resolve the "shown" flow
+// for the display and the web UI. They mirror pickFlowForChannel() but fall
+// back to the local SFM3505 reading when the remote sample is stale so the
+// operator still sees something useful if a physical sensor is wired.
+static float resolveDisplayedFlow(FlowControlSource src, uint8_t muxAddr,
+                                  float localFlow) {
+    if (src != FlowControlSource::REMOTE_F) return localFlow;
+    if (muxRouter.isActualFlowStale(muxAddr, REMOTE_FLOW_STALE_MS)) return localFlow;
+    return muxRouter.getActualFlow(muxAddr);
+}
+
+float getDisplayedAirFlow() {
+    FlowSourceConfig fs = localValveCtrl.getFlowSource();
+    return resolveDisplayedFlow(fs.air, 1, sensorData_bus0.sfm3505_air_flow);
+}
+
+float getDisplayedO2Flow() {
+    FlowSourceConfig fs = localValveCtrl.getFlowSource();
+    return resolveDisplayedFlow(fs.o2, 2, sensorData_bus1.sfm3505_o2_flow);
+}
 
 void setup() {
   // Initialize USB Serial - use default USB CDC
@@ -294,6 +359,14 @@ void setup() {
   localValveCtrl.begin(&muxRouter, &actuators[4], LocalValveControllerConfig{});
   localValveCtrl.setDefaults();
   localValveCtrl.setEnabled(false);  // Start disabled (pass-through to downstream controllers)
+  loadFlowSourceFromNVS();           // Restore persisted per-actuator flow source modes
+  wifiServer.setLocalValveController(&localValveCtrl);
+  wifiServer.setSaveSettingsCallback(saveFlowSourceToNVS);
+  {
+    FlowSourceConfig fs = localValveCtrl.getFlowSource();
+    hostCom.printf("Flow source: Air=%s O2=%s Blower=%s\n",
+                   flowSrcName(fs.air), flowSrcName(fs.o2), flowSrcName(fs.blower));
+  }
   hostCom.println("Local valve controller initialized (disabled, use LE1 to enable)");
 
   // Initialize valve characterizer
@@ -334,12 +407,17 @@ void updateVentilatorControl(uint32_t now) {
     llcSP.skipBlower     = (charCh == 4);
 
     LocalValveControllerMeasurements llcMeas;
-    llcMeas.airFlow_slm          = sensorData_bus0.sfm3505_air_flow;
-    llcMeas.o2Flow_slm           = sensorData_bus1.sfm3505_air_flow;
+    {
+      FlowSourceConfig fs = localValveCtrl.getFlowSource();
+      FlowSourceStale  st;
+      llcMeas.airFlow_slm    = pickFlowForChannel(fs.air,    1, sensorData_bus0.sfm3505_air_flow, st.air);
+      llcMeas.o2Flow_slm     = pickFlowForChannel(fs.o2,     2, sensorData_bus1.sfm3505_o2_flow,  st.o2);
+      llcMeas.blowerFlow_slm = pickFlowForChannel(fs.blower, 4, sensorData_bus0.sfm3505_air_flow, st.blower);
+      localValveCtrl.setFlowStale(st);
+    }
     llcMeas.airSupplyPressure_kPa = sensorData_bus0.supply_pressure;
     llcMeas.o2SupplyPressure_kPa  = sensorData_bus1.supply_pressure;
     llcMeas.airwayPressure_mbar   = getELVH_Pressure();
-    llcMeas.blowerFlow_slm        = sensorData_bus0.sfm3505_air_flow;
 
     float dt = sysConfig.control_interval / 1000000.0f;
     localValveCtrl.update(llcSP, llcMeas, dt);
@@ -385,7 +463,9 @@ void updateVentilatorControl(uint32_t now) {
 
   VentilatorMeasurements ventMeas;
   ventMeas.airwayPressure_mbar = getELVH_Pressure();
-  ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow + sensorData_bus1.sfm3505_air_flow;
+  // Bus 0 sensor is on the air line (use air calibration), bus 1 is on the O2 line
+  // (use O2 calibration). Using the air-cal value on pure-O2 flow under-reads by ~5 %.
+  ventMeas.inspFlow_slm = sensorData_bus0.sfm3505_air_flow + sensorData_bus1.sfm3505_o2_flow;
   ventMeas.expFlow_slm = 0;  // TODO: Add expiratory flow sensor if available
   ventMeas.deliveredO2_percent = fdo2Initialized ?
     fdo2Sensor.convertToPercentO2(fdo2Data.oxygenPartialPressure_hPa, fdo2Data.ambientPressure_mbar) : 21.0f;
@@ -428,14 +508,30 @@ void updateVentilatorControl(uint32_t now) {
   llcSP.skipMuxChannel = 0;
   llcSP.skipBlower     = false;
 
-  // Build LLC measurements from sensor data
+  // Build LLC measurements from sensor data (or MUX, depending on per-channel source)
   LocalValveControllerMeasurements llcMeas;
-  llcMeas.airFlow_slm = sensorData_bus0.sfm3505_air_flow;
-  llcMeas.o2Flow_slm = sensorData_bus1.sfm3505_air_flow;
+  {
+    FlowSourceConfig fs = localValveCtrl.getFlowSource();
+    FlowSourceStale  st;
+    llcMeas.airFlow_slm    = pickFlowForChannel(fs.air,    1, sensorData_bus0.sfm3505_air_flow, st.air);
+    llcMeas.o2Flow_slm     = pickFlowForChannel(fs.o2,     2, sensorData_bus1.sfm3505_o2_flow,  st.o2);
+    llcMeas.blowerFlow_slm = pickFlowForChannel(fs.blower, 4, sensorData_bus0.sfm3505_air_flow, st.blower);
+    localValveCtrl.setFlowStale(st);
+
+    // Throttled serial warning for any stale REMOTE_F channel
+    static uint32_t lastStaleWarnMs = 0;
+    if (localValveCtrl.anyFlowStale() && (millis() - lastStaleWarnMs > 1000)) {
+      lastStaleWarnMs = millis();
+      Serial.printf("[STALE] Remote flow telemetry: Air%s O2%s Blower%s (>%lums)\n",
+                    (fs.air==FlowControlSource::REMOTE_F && st.air)? "=STALE":"",
+                    (fs.o2 ==FlowControlSource::REMOTE_F && st.o2)? "=STALE":"",
+                    (fs.blower==FlowControlSource::REMOTE_F && st.blower)? "=STALE":"",
+                    REMOTE_FLOW_STALE_MS);
+    }
+  }
   llcMeas.airSupplyPressure_kPa = sensorData_bus0.supply_pressure;
   llcMeas.o2SupplyPressure_kPa = sensorData_bus1.supply_pressure;
   llcMeas.airwayPressure_mbar = getELVH_Pressure();
-  llcMeas.blowerFlow_slm = sensorData_bus0.sfm3505_air_flow;
 
   // LLC handles valve current computation OR pass-through
   float dt = 0.01f;  // 100 Hz control loop = 10 ms
@@ -489,6 +585,14 @@ void processSerialCommands() {
     }
     else if (upper == "LS") {
       Serial.printf("LLC: %s\n", localValveCtrl.isEnabled() ? "ENABLED" : "DISABLED");
+      {
+        FlowSourceConfig fs = localValveCtrl.getFlowSource();
+        FlowSourceStale  st = localValveCtrl.getFlowStale();
+        Serial.printf("  FlowSrc: Air=%s%s O2=%s%s Blower=%s%s\n",
+                      flowSrcName(fs.air),    (fs.air   ==FlowControlSource::REMOTE_F && st.air)   ? " STALE":"",
+                      flowSrcName(fs.o2),     (fs.o2    ==FlowControlSource::REMOTE_F && st.o2)    ? " STALE":"",
+                      flowSrcName(fs.blower), (fs.blower==FlowControlSource::REMOTE_F && st.blower)? " STALE":"");
+      }
       if (localValveCtrl.isEnabled()) {
         InspValveStatus air = localValveCtrl.getAirValveStatus();
         InspValveStatus o2  = localValveCtrl.getO2ValveStatus();
@@ -510,6 +614,71 @@ void processSerialCommands() {
                       blw.flowPIOutput, blw.pressurePIOutput,
                       blw.pressureLimiting ? "PLIM" : "FLOW",
                       blw.active ? "" : " (OFF)");
+      }
+      parser.clearCommand();
+    }
+    else if (upper == "LM") {
+      // LM<X><0|1>  X = A (air), O (O2), B (blower).  Persists to NVS.
+      // LM         prints current modes.
+      String rest = cmd.substring(2);
+      rest.trim();
+      if (rest.length() == 0) {
+        FlowSourceConfig fs = localValveCtrl.getFlowSource();
+        Serial.printf("LM: Air=%s O2=%s Blower=%s\n",
+                      flowSrcName(fs.air), flowSrcName(fs.o2), flowSrcName(fs.blower));
+        Serial.println("Usage: LMA0/LMA1, LMO0/LMO1, LMB0/LMB1  (0=local PI, 1=remote F)");
+      } else {
+        char which = (char)toupper((int)rest[0]);
+        int v = rest.substring(1).toInt();
+        FlowControlSource mode = (v != 0) ? FlowControlSource::REMOTE_F
+                                          : FlowControlSource::LOCAL_PI;
+        bool ok = true;
+        switch (which) {
+          case 'A': localValveCtrl.setAirFlowSource(mode);    break;
+          case 'O': localValveCtrl.setO2FlowSource(mode);     break;
+          case 'B': localValveCtrl.setBlowerFlowSource(mode); break;
+          default:  ok = false;
+                    Serial.println("LM: unknown channel (use A/O/B)");
+                    break;
+        }
+        if (ok) {
+          saveFlowSourceToNVS();
+          localValveCtrl.reset();
+          Serial.printf("LM%c=%s (saved)\n", which, flowSrcName(mode));
+        }
+      }
+      parser.clearCommand();
+    }
+    else if (cmd.length() >= 1 && (cmd[0] == 'F' || cmd[0] == 'f') &&
+             (cmd.length() == 1 || isdigit((int)cmd[1]) || cmd[1] == '-' || cmd[1] == '.' || cmd[1] == '+')) {
+      // Top-level F command — flow setpoint via LLC. Form: F<air_slm>[,<o2_slm>]
+      // Only honored when ventilator is OFF (clean separation from VO breath loop).
+      if (ventilator.isRunning()) {
+        Serial.println("[F] Ignored — ventilator running. Use VO0 first.");
+      } else {
+        String params = cmd.substring(1);
+        params.trim();
+        float airF = 0.0f, o2F = 0.0f;
+        if (params.length() > 0) {
+          int comma = params.indexOf(',');
+          if (comma < 0) {
+            airF = params.toFloat();
+          } else {
+            airF = params.substring(0, comma).toFloat();
+            o2F  = params.substring(comma + 1).toFloat();
+          }
+        }
+        llcManualAirFlow_slm = airF;
+        llcManualO2Flow_slm  = o2F;
+        llcManualTestActive  = true;
+        if (!localValveCtrl.isEnabled()) {
+          localValveCtrl.setEnabled(true);
+          localValveCtrl.reset();
+          Serial.println("[F] LLC auto-enabled");
+        }
+        FlowSourceConfig fs = localValveCtrl.getFlowSource();
+        Serial.printf("[F] Air=%.1f slm (%s), O2=%.1f slm (%s)\n",
+                      airF, flowSrcName(fs.air), o2F, flowSrcName(fs.o2));
       }
       parser.clearCommand();
     }

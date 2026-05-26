@@ -327,14 +327,18 @@ void ActuatorControl::outputToValve(float signal_percent) {
   }
 
   if (_pwmPin >= 0) {
-    // Direct PWM output — bypass serial MUX
+    // Direct PWM output to local GPIO (e.g. blower MOSFET)
     float clamped = constrain(signal_percent, 0.0f, 100.0f);
     uint32_t duty = (uint32_t)(clamped * (float)_pwmMaxDuty / 100.0f);
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    ledcWrite((uint8_t)_pwmPin, duty);
+#else
     ledcWrite(_pwmChannel, duty);
-  } else {
-    // Normal path: send valve command via serial to external actuator
-    sendSerialCommand('V', signal_percent);
+#endif
   }
+  // Also forward to the serial MUX so any remote board on this address still
+  // receives the command. Slots without a local PWM pin only do this branch.
+  sendSerialCommand('V', signal_percent);
   _last_sent_valve_signal = signal_percent;
 }
 
@@ -344,9 +348,15 @@ void ActuatorControl::setPwmOutput(int8_t pin, uint32_t freq_hz, uint8_t resolut
   _pwmResolutionBits = resolution_bits;
   _pwmMaxDuty = (1UL << resolution_bits) - 1;
   if (pin >= 0) {
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && ESP_ARDUINO_VERSION_MAJOR >= 3
+    // Arduino-ESP32 v3.x: pin-based ledc API (channel auto-assigned)
+    ledcAttach((uint8_t)pin, freq_hz, resolution_bits);
+    ledcWrite((uint8_t)pin, 0);  // Start at 0% duty
+#else
     ledcSetup(ledcChannel, freq_hz, resolution_bits);
     ledcAttachPin(pin, ledcChannel);
     ledcWrite(ledcChannel, 0);  // Start at 0% duty
+#endif
   }
 }
 

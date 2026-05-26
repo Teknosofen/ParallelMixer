@@ -11,7 +11,7 @@ Serial command interface for controlling the ParallelMixer system. Commands are 
 | `Q` | Quiet mode (output verbosity) | `Q<0-7>` |
 | `M` | MUX channel selection | `M<0-5>` |
 | `C` | Controller mode | `C<0-5>` |
-| `F` | Flow reference | `F<L/min>` |
+| `F` | LLC flow setpoint (air[,O2]) | `F<SLM>[,<SLM>]` |
 | `V` | Valve output (manual) | `V<0-100%>` |
 | `O` | Signal generator offset | `O<0-100%>` |
 | `A` | Signal generator amplitude | `A<0-100%>` |
@@ -22,6 +22,15 @@ Serial command interface for controlling the ParallelMixer system. Commands are 
 | `D` | PID derivative gain | `D<float>` |
 | `Z` | Zero (reset) PID integrator | `Z` |
 | `E` | External/Internal PWM | `E<0\|1>` |
+| `LE` | Enable/disable LLC | `LE<0\|1>` |
+| `LS` | LLC status (modes + setpoints + stale flags) | `LS` |
+| `LM` | Flow source mode (per actuator) | `LM`, `LM[A\|O\|B]<0\|1>` |
+| `LF` | LLC manual flow test (air/O2) | `LF<SLM>[,<SLM>]` |
+| `LB` | LLC blower flow test | `LB<SLM>[,<Plim_mbar>]` |
+| `LP` | LLC pressure safety limit | `LP<mbar>` |
+| `LX` | Stop LLC manual tests | `LX` |
+| `CC` | Actuator characterization | `CC<ch>[,max[,step[,settleMs]]]` |
+| `CX` | Abort characterization | `CX` |
 | `?` | Show help | `?` |
 | `!` | Show current settings | `!` |
 
@@ -138,12 +147,27 @@ D           Query current D gain
 Z           Reset PID integrator to zero
 ```
 
-### Flow Reference (`F`)
+### Flow Reference (`F`) — top-level LLC flow setpoint
+
+Sets the inspiratory flow setpoint(s) fed into the Local Valve Controller (LLC).
+Only active when the ventilator is OFF (use `VO0` first); otherwise the command
+is ignored with a warning. The LLC routes the setpoint per actuator according to
+the configured flow source mode (see `LM`):
+
+- `LOCAL_PI` (default): runs an on-ESP PI loop that emits `V<%>` to the
+  motor-controller over MUX.
+- `REMOTE_F`: forwards the SLM setpoint directly as `F<SLM>` over MUX to the
+  motor-controller's own flow loop.
+
 ```
-F10         Set flow reference to 10 L/min
-F5.5        Set flow reference to 5.5 L/min
-F           Query current flow reference
+F10         10 SLM on air, 0 SLM on O2
+F20,5       20 SLM air, 5 SLM O2
+F           Use 0 SLM on both (idle test)
 ```
+
+Note: the legacy per-MUX-channel `F` (digital_flow_reference inside
+`SystemConfig`) is retained in storage for compatibility but is no longer
+reachable from the serial port — top-level `F` always goes through the LLC.
 
 ---
 
@@ -243,9 +267,90 @@ C0          Set mode to PID control
 P2.0        Set proportional gain
 I0.5        Set integral gain
 D0          Set derivative gain (usually 0)
-F10         Set flow reference to 10 L/min
+F10         Set LLC air flow setpoint to 10 SLM (vent OFF)
 Z           Reset integrator
 ```
+
+---
+
+## Local Valve Control (LLC)
+
+The LLC arbitrates flow between two sources per actuator and persists the
+selection in NVS so it survives reboot.
+
+### Enable / Status
+```
+LE1         Enable LLC
+LE0         Disable LLC (pure pass-through)
+LS          Print full LLC status (modes, setpoints, stale flags, gains)
+```
+
+### Flow Source Mode (`LM`)
+
+For each inspiratory actuator (air, O2, blower) choose whether flow control
+runs on this ESP or on the downstream motor-controller CPU:
+
+```
+LM          Show current modes for all three actuators
+LMA0        Air valve  -> ESP local PI loop (sends V over MUX)
+LMA1        Air valve  -> remote motor CPU (sends F over MUX)
+LMO0        O2 valve   -> ESP local PI
+LMO1        O2 valve   -> remote motor CPU
+LMB0        Blower     -> ESP local PI (ESP drives PWM directly)
+LMB1        Blower     -> remote motor CPU
+```
+
+All three modes default to `0` (ESP local PI) on first boot and are saved
+to flash (`Preferences` namespace `pmixer`, keys `fsrc_air`/`fsrc_o2`/`fsrc_blw`)
+whenever they change — whether the change is made via serial or via the
+web UI.
+
+### Remote Flow Telemetry & Stale Detection
+
+When a channel is in `REMOTE_F` mode the LLC uses the flow measurement returned
+by that motor-controller over the MUX (via `getActualFlow`) instead of the
+on-board SFM3505. If no fresh value arrives within `REMOTE_FLOW_STALE_MS`
+(200 ms), the channel is flagged stale:
+
+- Flow used for control falls back to `0.0` for safety.
+- Serial console emits a once-per-second warning:
+  `[STALE] Remote flow telemetry: Air=STALE ... (>200ms)`
+- Web UI shows a red "REMOTE FLOW STALE" badge plus a per-channel "⚠ stale"
+  marker next to the affected dropdown.
+- `LS` output marks the offending channel.
+
+### LLC Manual Flow Test (`LF`, `LB`)
+```
+LF10        10 SLM air, 0 O2 (vent must be OFF)
+LF20,5      20 SLM air, 5 SLM O2
+LF          Show current test status
+LB50        50 SLM blower, default Plim 40 mbar
+LB100,30    100 SLM blower, Plim 30 mbar
+LP35        Set pressure safety limit to 35 mbar
+LX          Stop all LLC manual tests
+```
+
+### Actuator Characterization (`CC`, `CX`)
+```
+CC1                 Air valve, defaults (max 12 %V, step 0.1, settle 200 ms)
+CC2,12,0.1          O2 valve sweep at supply pressure
+CC3,12,0.1          Exp valve sweep (set flow target first via LF)
+CC4,100,2,300       Blower PWM 0–100 %, 2 % step, 300 ms settle
+CX                  Abort sweep
+```
+
+---
+
+## Web Endpoints (HTTP)
+
+In addition to the serial interface, the WiFi server exposes:
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/` | GET | Live UI (charts + ventilator panel + flow source card) |
+| `/data` | GET | Single sample JSON (incl. `fsrcAir`/`fsrcO2`/`fsrcBlw`, `flowStale`, `airStale`, `o2Stale`, `blwStale`) |
+| `/dataBuffer` | GET | High-speed sample batch for charts |
+| `/flowsource` | GET | Set LLC flow source modes: `?air=0\|1&o2=0\|1&blw=0\|1`. Persists to NVS and returns the current state. |
 
 ---
 

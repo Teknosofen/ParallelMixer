@@ -612,10 +612,10 @@ Chart.js: Embedded in flash as gzip-compressed PROGMEM (69KB flash → 205KB JS)
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `tidalVolume_mL` | float | 500.0 | Target tidal volume in mL |
-| `maxInspFlow_slm` | float | 60.0 | Maximum inspiratory flow (L/min) |
-| `totalFlow_slm` | float | 30.0 | Direct flow setting (if not using Vt) |
-| `useVolumeControl` | bool | true | true = calculate flow from Vt |
+| `tidalVolume_mL` | float | 500.0 | Target tidal volume in mL (used when `useVolumeControl=true`) |
+| `maxInspFlow_slm` | float | 60.0 | **MF** — ceiling on total inspiratory flow, range 5–200 SLM. Always applied: the computed/commanded total flow is clamped to this value before splitting into Air/O2. |
+| `totalFlow_slm` | float | 30.0 | **TF** — direct total flow setpoint, range 1–200 SLM. Used **only** when `useVolumeControl=false` (VC0). Ignored in volume-control mode (flow is computed from Vt / active insp time). |
+| `useVolumeControl` | bool | true | `true` (VC1) → flow computed from Vt and insp time, then clamped to MF. `false` (VC0) → flow = TF, clamped to MF. |
 
 ### Pressure Parameters
 
@@ -690,13 +690,41 @@ Note: `expNonTrigFraction + expSyncFraction` should equal 1.0 (or expSyncFractio
 
 ## Flow Calculations
 
-### Flow from Tidal Volume
+### Target total flow (MF vs TF)
+
+The HLC computes a single `targetTotalFlow_slm` per inspiration, which is then split into Air and O2 setpoints based on `targetFiO2`. The source depends on `useVolumeControl`:
+
+```
+if (useVolumeControl) {                       // VC1 — volume control
+    targetTotalFlow = requiredFlow_from_Vt;   // see below
+} else {                                      // VC0 — flow control
+    targetTotalFlow = totalFlow_slm;          // TF used directly
+}
+
+// MF is always enforced as the upper bound
+if (targetTotalFlow > maxInspFlow_slm) {
+    targetTotalFlow = maxInspFlow_slm;
+    flowLimited = true;                       // status flag exposed to UI
+}
+```
+
+**MF (`maxInspFlow_slm`, 5–200 SLM)** is a hard ceiling. It protects against
+unrealistically high commanded flows in VC1 (e.g. small insp time × large Vt)
+and caps the user's TF entry in VC0. When the clamp is active, `flowLimited`
+is set so the UI / display can flag that the delivered Vt may fall short of
+the target.
+
+**TF (`totalFlow_slm`, 1–200 SLM)** is the direct flow setpoint and is
+**only used in VC0**. In VC1 it is stored but has no effect on delivery.
+
+### Flow from Tidal Volume (VC1 only)
 ```
 activeInspTime_min = (insp1Time + insp2Time) / 60
 requiredFlow_slm = (tidalVolume_mL / 1000) / activeInspTime_min
 ```
 
-If `requiredFlow > maxInspFlow`, use `maxInspFlow` (volume will be limited).
+If `requiredFlow > maxInspFlow`, the actual delivered flow is clamped to
+`maxInspFlow` (volume will be limited and `flowLimited=true`).
 
 Example with Vt=500mL, activeInspTime=1.5s:
 - activeInspTime_min = 1.5/60 = 0.025 min

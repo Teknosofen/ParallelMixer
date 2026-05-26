@@ -35,6 +35,7 @@ public:
     void drawFlow2(const String& flow);  // Bus 1 flow display
     void drawPressure(const String& pressure);
     void drawPressure2(const String& pressure);  // Bus 1 pressure display
+    void drawAirwayPressure(const String& pressure);  // Airway (LP) pressure display
     void drawValveCtrlSignal(const String& signal);
     void drawCurrent(const String& current);
     void drawO2(const String& o2);
@@ -65,6 +66,7 @@ public:
     DisplayPos statusFlow2Pos;  // Bus 1 flow position
     DisplayPos statusPressurePos;
     DisplayPos statusPressure2Pos;  // Bus 1 pressure position
+    DisplayPos statusAirwayPos;     // Airway (LP) pressure position
     DisplayPos statusValveCtrlSignalPos;
     DisplayPos statusCurrentPos;
     DisplayPos statusO2Pos;
